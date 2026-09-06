@@ -65,7 +65,7 @@ Panel {
   readonly property int glyphWidth: Style.space(16)
   readonly property int statGap: Style.spacing.controlGap
   function columnWidth(key) {
-    return glyphWidth + Style.spacing.sm + Math.ceil(digit.advanceWidth * Model.maxDigits(rows, key))
+    return glyphWidth + Style.spacing.sm + Math.ceil(digit.advanceWidth * Model.maxChars(rows, key))
   }
 
   readonly property string heroMeta: {
@@ -118,7 +118,9 @@ Panel {
   component StatCell: Item {
     id: cell
     property string glyph: ""
-    property int value: 0
+    // Already rendered by Model.rows, because the column widths are counted off
+    // these same strings.
+    property string display: ""
     property bool known: true
     property string tooltip: ""
     property color tint: root.dim
@@ -144,9 +146,7 @@ Panel {
       anchors.leftMargin: Style.spacing.sm
       anchors.right: parent.right
       anchors.verticalCenter: parent.verticalCenter
-      // An em dash, not a zero: a plugin the marketplace has never heard of has
-      // no views, which is a different fact from having none yet.
-      text: cell.known ? Model.formatCount(cell.value) : "—"
+      text: cell.display
       color: cell.known ? root.foreground : root.dim
       font.family: root.fontFamily
       font.pixelSize: Style.font.bodySmall
@@ -176,7 +176,7 @@ Panel {
     open: root.opened
     focusTarget: keyCatcher
     padding: Style.space(16)
-    contentWidth: card.fittedContentWidth(Style.space(460))
+    contentWidth: card.fittedContentWidth(Style.space(510))
     contentHeight: card.fittedContentHeight(content.implicitHeight)
 
     PanelKeyCatcher {
@@ -333,28 +333,42 @@ Panel {
                 spacing: root.statGap
 
                 StatCell {
-                  width: root.columnWidth("views")
+                  width: root.columnWidth("viewsText")
                   // U+F0208 nf-md-eye
                   glyph: "\udb80\ude08"
-                  value: rowCard.modelData.views
+                  display: rowCard.modelData.viewsText
                   known: rowCard.modelData.known
                   tooltip: "Listing views"
                 }
 
                 StatCell {
-                  width: root.columnWidth("copies")
+                  width: root.columnWidth("rateText")
+                  // U+F04C5 nf-md-speedometer
+                  glyph: "\udb81\udcc5"
+                  display: rowCard.modelData.rateText
+                  known: rowCard.modelData.rated
+                  tooltip: rowCard.modelData.rated
+                    ? "Views per day since listing — " + Model.formatCount(rowCard.modelData.views)
+                      + " over " + Model.pluralize(rowCard.modelData.days, "day")
+                    : (rowCard.modelData.known
+                       ? "No listing date — first-party plugins are not listed"
+                       : "Views per day since listing")
+                }
+
+                StatCell {
+                  width: root.columnWidth("copiesText")
                   // U+F018F nf-md-content_copy
                   glyph: "\udb80\udd8f"
-                  value: rowCard.modelData.copies
+                  display: rowCard.modelData.copiesText
                   known: rowCard.modelData.known
                   tooltip: "Install command copied"
                 }
 
                 StatCell {
-                  width: root.columnWidth("hearts")
+                  width: root.columnWidth("heartsText")
                   // U+F02D1 nf-md-heart
                   glyph: "\udb80\uded1"
-                  value: rowCard.modelData.hearts
+                  display: rowCard.modelData.heartsText
                   known: rowCard.modelData.known
                   tooltip: "Hearts"
                   tint: rowCard.modelData.hearts > 0 ? Color.accent : root.dim

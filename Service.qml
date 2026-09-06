@@ -28,6 +28,7 @@ Item {
 
   readonly property string pluginId: "com.github.marvreichmann.omapluginstats"
   readonly property string statsUrl: "https://api.omarchyplugins.com/v1/stats"
+  readonly property string catalogUrl: "https://plugins.omarchy.org/catalog.json"
   readonly property string pluginsDir: (Quickshell.env("XDG_CONFIG_HOME") || Quickshell.env("HOME") + "/.config") + "/omarchy/plugins"
   readonly property string stateDir: (Quickshell.env("XDG_STATE_HOME") || Quickshell.env("HOME") + "/.local/state") + "/omarchy"
   readonly property string statePath: stateDir + "/omapluginstats.json"
@@ -46,6 +47,18 @@ Item {
   // locally. Absent ids are shown as ids.
   property var names: ({})
 
+  // Plugin id to the date its listing went up, which is the denominator of the
+  // views-per-day figure. A listing date never changes, so this is cached for
+  // good rather than refetched — the catalog is only consulted when a watched
+  // plugin has no date yet.
+  property var listings: ({})
+
+  // When the catalog was last consulted. Some ids will never get a date — the
+  // first-party omarchy.* plugins have none, and a typo has no listing at all —
+  // so without this the panel would re-download the catalog on every open.
+  property double listingsCheckedAt: 0
+  readonly property int listingsRetryMs: 24 * 60 * 60 * 1000
+
   // When `stats` was last replaced by a successful fetch, as epoch ms. Survives
   // restarts: the panel says how old its numbers are, and numbers cached from
   // last night are still better than an empty panel while curl runs.
@@ -53,13 +66,17 @@ Item {
 
   property string lastError: ""
   readonly property bool loading: statsProc.running
+  readonly property bool listingsLoading: listingsProc.running
 
   // Opening the panel refreshes, but only if the numbers have had time to
   // change. Engagement counts move over hours; re-fetching 160 KB every time a
   // popup opens would be rude to a marketplace that serves this for free.
   readonly property int staleAfterMs: 5 * 60 * 1000
 
-  readonly property var rows: Model.rows(watchlist, stats, names)
+  // Date.now() is read when the binding evaluates and never re-read on its own,
+  // which is what we want: a rate averaged over days does not visibly move
+  // within a session, and a ticking clock here would rebuild every row for it.
+  readonly property var rows: Model.rows(watchlist, stats, names, listings, Date.now())
 
   function add(id) {
     var next = Model.addToWatchlist(watchlist, id)
@@ -69,6 +86,7 @@ Item {
     // A newly added id is usually already in the response we are holding, in
     // which case its row is populated before the user's finger leaves the key.
     if (!Model.statsFor(stats, id).known) refresh()
+    ensureListings()
     return true
   }
 
@@ -80,9 +98,14 @@ Item {
     // a stale entry is harmless — but it would otherwise be written to the
     // state file forever.
     var trimmed = ({})
-    for (var i = 0; i < next.length; i++) if (names[next[i]] !== undefined) trimmed[next[i]] = names[next[i]]
+    var keptListings = ({})
+    for (var i = 0; i < next.length; i++) {
+      if (names[next[i]] !== undefined) trimmed[next[i]] = names[next[i]]
+      if (listings[next[i]] !== undefined) keptListings[next[i]] = listings[next[i]]
+    }
     names = trimmed
-    flushState()
+    listings = keptListings
+    flushState(String(id))
   }
 
   function setName(id, name) {
@@ -104,6 +127,7 @@ Item {
 
   function refreshIfStale() {
     if (Date.now() - fetchedAt >= staleAfterMs) refresh()
+    ensureListings()
   }
 
   function consume(text) {
@@ -140,6 +164,66 @@ Item {
     }
   }
 
+  // --------------------------------------------------------- listing dates
+
+  function missingListings() {
+    var missing = []
+    for (var i = 0; i < watchlist.length; i++) {
+      if (listings[watchlist[i]] === undefined) missing.push(watchlist[i])
+    }
+    return missing
+  }
+
+  function ensureListings() {
+    if (listingsProc.running || missingListings().length === 0) return
+    if (Date.now() - listingsCheckedAt < listingsRetryMs) return
+    listingsProc.running = true
+  }
+
+  function consumeListings(text) {
+    var dates = Model.parseListingDates(text)
+    var found = 0
+    var next = ({})
+    for (var k in listings) next[k] = listings[k]
+    for (var i = 0; i < watchlist.length; i++) {
+      var id = watchlist[i]
+      if (dates[id] !== undefined) {
+        next[id] = dates[id]
+        found++
+      }
+    }
+    // An empty result means the pipeline produced nothing readable rather than
+    // "these plugins have no dates", so it must not count as an answer — the
+    // retry window would otherwise lock the panel out for a day over a blip.
+    var empty = true
+    for (var probe in dates) { empty = false; break }
+    if (empty) return
+
+    listings = next
+    listingsCheckedAt = Date.now()
+    if (found > 0) flushState()
+  }
+
+  Process {
+    id: listingsProc
+    // The catalog is 6.3 MB of pretty-printed JSON and all we want from it is a
+    // date per plugin, so grep does the narrowing before any of it reaches the
+    // QML engine: ~215 KB of "id"/"listedAt" lines instead. --compressed keeps
+    // the transfer around 830 KB.
+    //
+    // This is the one command here that goes through a shell, because it is a
+    // pipeline. The string is a constant — no watched id, and nothing else the
+    // user can type, is interpolated into it.
+    command: ["sh", "-c",
+      "curl -fsS --compressed --max-time 20 " + root.catalogUrl
+        + " | grep -E '^[[:space:]]*\"(id|listedAt)\": '"]
+
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: root.consumeListings(text)
+    }
+  }
+
   // ------------------------------------------------------------------ names
 
   // One reader per watched plugin. A FileView is not an Item, so it needs an
@@ -172,6 +256,10 @@ Item {
 
   property bool stateLoaded: false
 
+  // The watchlist as the file last said it was. Writes are merged against this
+  // so that nothing but a removal can shorten what is stored.
+  property var diskWatchlist: []
+
   function loadState(text) {
     try {
       var parsed = JSON.parse(text)
@@ -179,10 +267,21 @@ Item {
         // The watchlist is the user's own data and the file is where it lives,
         // so whatever the file says wins — including when another instance of
         // this service wrote it a moment ago.
-        if (Array.isArray(parsed.watchlist)) root.watchlist = Model.normalizeWatchlist(parsed.watchlist)
+        if (Array.isArray(parsed.watchlist)) {
+          root.watchlist = Model.normalizeWatchlist(parsed.watchlist)
+          root.diskWatchlist = root.watchlist
+        }
         // The counts are only a cache, and ours is the better one: a fetch of
         // our own holds every listing, while the file holds just the watched
         // ones. Take the file's copy only when it is the newer of the two.
+        var dates = parsed.listings
+        if (dates && typeof dates === "object" && !Array.isArray(dates)) {
+          var loaded = ({})
+          for (var id in dates) if (Model.validPluginId(id) && typeof dates[id] === "string") loaded[id] = dates[id]
+          root.listings = loaded
+        }
+        var checked = Number(parsed.listingsCheckedAt)
+        if (Number.isFinite(checked) && checked > 0) root.listingsCheckedAt = checked
         var at = Number(parsed.fetchedAt)
         if (Number.isFinite(at) && at > root.fetchedAt) {
           var cached = Model.normalizeStats(parsed.stats)
@@ -197,15 +296,21 @@ Item {
     root.stateLoaded = true
   }
 
-  function flushState() {
+  // `removedId`, when given, is the single id this write is meant to take away.
+  // Only remove() passes one.
+  function flushState(removedId) {
     if (!stateLoaded) return
+    var stored = Model.watchlistToWrite(root.watchlist, root.diskWatchlist, removedId)
+    root.diskWatchlist = stored
     stateFile.setText(JSON.stringify({
       version: 1,
-      watchlist: root.watchlist,
+      watchlist: stored,
       // Only the watched plugins. The rest of the response is 160 KB of other
       // people's listings and would be stale by the next fetch anyway.
-      stats: Model.pickStats(root.stats, root.watchlist),
-      fetchedAt: root.fetchedAt
+      stats: Model.pickStats(root.stats, stored),
+      fetchedAt: root.fetchedAt,
+      listings: root.listings,
+      listingsCheckedAt: root.listingsCheckedAt
     }, null, 2) + "\n")
   }
 

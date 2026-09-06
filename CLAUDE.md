@@ -46,9 +46,39 @@ none:
 inflate the numbers it exists to report — including other people's. This plugin
 issues exactly one HTTP request, and it is a GET.
 
-`catalog.json` on the site would give a name for every id, but it is 6.3 MB.
-Names come from installed manifests instead (`Service.qml`'s `nameReaders`), and
-anything not installed is shown by id.
+There is **no history of any kind**, which was checked rather than assumed
+before anyone asks for a trend line: ten other paths (`/v1/stats/<id>`,
+`/v1/history`, `/v1/plugins/<id>/history`, `/v1/trends`, …) all 404, and
+`?days=7`, `?since=`, `?period=7d` return the identical payload. The only time
+series the site publishes is `explorer-data.json`'s `growth`, and that is the
+size of the catalog per day, not per-plugin engagement. A real "views this week"
+therefore means sampling the totals ourselves daily for a week first — see the
+views-per-day note below for what is possible without that.
+
+## The catalog
+
+`catalog.json` is the source of two things this plugin cannot get from the API,
+and it is 6.3 MB of pretty-printed JSON — far too much to hand to the QML engine
+for a few dozen bytes:
+
+- **Names** are not taken from it at all. They come from installed manifests
+  (`Service.qml`'s `nameReaders`); anything not installed is shown by id.
+- **Listing dates** are, because there is nowhere else. `listingsProc` pipes the
+  download through `grep` so only the `"id"` and `"listedAt"` lines arrive —
+  about 215 KB of text, and `--compressed` keeps the transfer near 830 KB.
+  `Model.parseListingDates` pairs each date with the id above it.
+
+That pairing is sound because of how the file is shaped, and this was verified
+against a full parse rather than eyeballed: exactly one `"id"` line per plugin
+(2538 of them), all at the same nesting depth, 2502 `"listedAt"` lines, zero
+mismatches. The 36 plugins without a date are the first-party `omarchy.*` ones,
+which are not community listings — they show a dash for the rate, and
+`listingsCheckedAt` stops the panel re-downloading the catalog every open
+looking for a date they will never have.
+
+`explorer-data.json` also carries `listedAt` and is a third of the size, but it
+covers only the 2502 listed plugins and would need a second source for the rest,
+so the catalog is the one to use.
 
 ## Tests
 
@@ -163,6 +193,34 @@ Four files, one direction of data flow:
 - `add()` and `remove()` flush immediately rather than through `saveTimer`. A
   discrete user action must not sit in a debounce window where an external
   reload can swallow it; the timer is there for the fetch.
+- **A write can only add ids.** `Model.watchlistToWrite` merges what this
+  instance holds into what the file holds, and a removal takes away exactly the
+  one id the user removed — never "store my view of the list", which would let a
+  truncated instance wipe the rest on its way past. Keep this even if the
+  underlying cause below is ever found: it is what makes the failure
+  non-destructive rather than merely unlikely.
+- Views per day is a **lifetime average**, and the panel must not imply
+  otherwise. It is the only rate the marketplace's data supports (see above);
+  `rated` is false — a dash, not a zero — when there is no listing date, because
+  no rate and a rate of nothing are different facts.
+
+### One thing that is still unexplained
+
+Twice during development the watchlist collapsed to its first entry on its own,
+both times shortly after installing changed files and restarting the shell. The
+first was traced to an instance that had loaded before the state file existed
+overwriting a good file on its next flush, which is reproducible
+(a second Quickshell instance writing underneath a running one) and is what
+`watchChanges` fixes. The second happened *after* that fix and could not be
+reproduced across four targeted attempts: clean restart, hot reload of
+`Panel.qml`, hot reload of `Service.qml`, and loading a state file written by
+the previous version. Instrumenting `loadState`/`flushState`/`remove` showed
+nothing but correct values.
+
+So the cause is not known, and the guard above is what stands between it and
+data loss. If it happens again, the fastest evidence is that instrumentation:
+log the text length and parsed watchlist in `loadState`, and the watchlist in
+every `flushState`, then reproduce with `journalctl --user -f | grep`.
 - `remove()` drops the id's name along with it. The name map is only ever read
   through the watchlist, so a leftover entry is invisible — and would be written
   to the state file forever.

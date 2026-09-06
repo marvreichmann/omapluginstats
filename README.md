@@ -7,8 +7,9 @@ Views, copies and hearts for a watchlist of plugins on the
 
 Add the plugin ids you care about — yours, or anyone's — and the panel shows
 what the marketplace has recorded for each: how many people opened the listing,
-how many copied its install command, and how many hearted it. Rows are ranked by
-views, most-read first.
+how many views a day that averages since it was listed, how many copied its
+install command, and how many hearted it. Rows are ranked by views, most-read
+first.
 
 ## Install
 
@@ -28,6 +29,13 @@ picker. The icon opens the panel; there is no counter on the bar itself.
 - Hover a row and use the bin icon to stop watching it.
 - **Refresh** fetches the current numbers. Opening the panel does the same if
   the ones on screen are more than five minutes old.
+- The speedometer column is **average views per day since listing** — total
+  views divided by the days the listing has been up, counted inclusively. It is
+  a lifetime average, not a recent trend: the marketplace publishes running
+  totals and no history, so "views this week" is not something anyone can
+  compute from it without recording the totals daily first.
+- First-party `omarchy.*` plugins show a dash there. They ship with the shell
+  rather than being listed, so there is no listing date to average over.
 - An id the marketplace does not know shows dashes and *Not on the
   marketplace* — usually a typo, or a listing that has been retired.
 - A watched plugin that is also installed is shown by name, with its id
@@ -36,10 +44,16 @@ picker. The icon opens the panel; there is no counter on the bar itself.
 
 ## What it talks to
 
-One endpoint, read-only: `GET https://api.omarchyplugins.com/v1/stats`, which
-returns the counts for every listing on the marketplace in a single response.
-The watchlist is applied on this machine, so the marketplace is never told which
-plugins you are interested in.
+One endpoint for the counts, read-only:
+`GET https://api.omarchyplugins.com/v1/stats`, which returns them for every
+listing on the marketplace in a single response. The watchlist is applied on
+this machine, so the marketplace is never told which plugins you are interested
+in.
+
+Listing dates come from the public catalog at
+`https://plugins.omarchy.org/catalog.json`, and only when a watched plugin has
+no date yet — a listing date never changes, so it is cached for good. Most
+sessions never fetch it at all.
 
 This plugin never posts to `/v1/events` — the endpoint the website uses to
 *record* a view, a copy or a heart. Reading your numbers here does not change

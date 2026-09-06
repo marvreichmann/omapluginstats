@@ -12,6 +12,9 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - A bar panel showing views, copies and hearts for a watchlist of marketplace
   plugins, ranked by views.
+- Average views per day since listing, alongside the totals. Listing dates come
+  from the public catalog and are fetched only for watched plugins that have no
+  date yet.
 - Add a plugin by id and remove it from its row; the watchlist is kept in
   `$XDG_STATE_HOME/omarchy/omapluginstats.json`, along with the last numbers
   fetched so the panel opens with something to show.

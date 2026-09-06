@@ -119,6 +119,32 @@ function removeFromWatchlist(list, id) {
   return current.slice(0, at).concat(current.slice(at + 1))
 }
 
+// What a write should actually put on disk.
+//
+// Every write merges what this instance holds into what the file holds, so a
+// write can only ever add ids — an instance that somehow ends up holding a
+// short list cannot destroy a longer one already on disk. The worst it can do
+// is show fewer rows than it saved, until its next reload.
+//
+// A removal is the one write that takes something away, and it takes away
+// exactly the id the user removed. It is not "store my view of the list",
+// because that would let a truncated instance wipe the rest on the way past.
+//
+// This is a belt on top of the file being watched: that keeps the two copies in
+// step, this makes the failure non-destructive when they are not.
+function watchlistToWrite(current, onDisk, removedId) {
+  var next = normalizeWatchlist(current)
+  var disk = normalizeWatchlist(onDisk)
+  for (var i = 0; i < disk.length; i++) {
+    if (next.indexOf(disk[i]) < 0) next.push(disk[i])
+  }
+  if (typeof removedId === "string" && removedId !== "") {
+    var at = next.indexOf(removedId)
+    if (at >= 0) next = next.slice(0, at).concat(next.slice(at + 1))
+  }
+  return next
+}
+
 // The stats endpoint knows ids, not names. A watched plugin that happens to be
 // installed has its name sitting in its own manifest, which is where the panel
 // gets one; anything else is shown by id.
@@ -141,17 +167,83 @@ function displayName(names, id) {
   return key
 }
 
+// Listing dates, read out of the marketplace catalog. The catalog is 6.3 MB of
+// pretty-printed JSON — far too much to hand to the QML engine for three dozen
+// bytes of it — so the service pipes it through grep and this parses what comes
+// back: the `"id"` and `"listedAt"` lines, in document order.
+//
+// That pairing is only sound because of how the catalog is shaped, which was
+// checked rather than assumed: exactly one `"id"` line per plugin, all at the
+// same nesting depth, and every `"listedAt"` line belongs to the plugin whose
+// id last appeared. Verified against a full parse of all 2538 listings — 2502
+// dates, no mismatches. The 36 without one are the first-party `omarchy.*`
+// plugins, which are not community listings and have no listing date at all.
+function parseListingDates(text) {
+  var out = {}
+  var lines = String(text === undefined || text === null ? "" : text).split("\n")
+  var current = null
+  for (var i = 0; i < lines.length; i++) {
+    var match = /^\s*"(id|listedAt)":\s*"([^"]*)"/.exec(lines[i])
+    if (!match) continue
+    if (match[1] === "id") {
+      current = validPluginId(match[2]) ? match[2] : null
+    } else if (current !== null) {
+      out[current] = match[2]
+      // One date per id: anything further before the next id line is not ours.
+      current = null
+    }
+  }
+  return out
+}
+
+// Days the listing has been up, counted inclusively — a plugin listed this
+// morning has been listed for one day, not zero, and dividing by zero views per
+// day helps nobody. Returns 0 for "no listing date", which is a different thing
+// from a rate of zero.
+function listingDays(nowMs, listedAt) {
+  if (typeof listedAt !== "string" || listedAt === "") return 0
+  var listed = Date.parse(listedAt)
+  if (!Number.isFinite(listed)) return 0
+  var elapsed = Number(nowMs) - listed
+  if (!Number.isFinite(elapsed)) return 0
+  return Math.max(1, Math.floor(elapsed / 86400000) + 1)
+}
+
+// Views since listing, averaged over the days it has been listed. This is the
+// only rate the marketplace's data can support: it publishes running totals and
+// no history, so a genuine "views this week" would mean sampling the totals
+// ourselves for a week first.
+function viewsPerDay(views, days) {
+  return days > 0 ? safeCount(views) / days : 0
+}
+
+// One decimal below ten, none above: the difference between 2.1 and 2.4 a day
+// is worth seeing, the difference between 137 and 137.4 is noise.
+function formatRate(value) {
+  var rate = Number(value)
+  if (!Number.isFinite(rate) || rate < 0) return "0.0"
+  // Round before choosing the format, not after: 9.96 rounds to 10, and
+  // deciding first would print it as "10.0" among a column of bare integers.
+  var rounded = Math.round(rate * 10) / 10
+  return rounded >= 10 ? String(Math.round(rounded)) : rounded.toFixed(1)
+}
+
 // One row per watched plugin, most-viewed first. Views are the ranking because
 // they are the number that moves: a listing collects them without anyone
 // deciding to act, so ordering by anything else leaves the busiest plugin
 // somewhere in the middle of the list.
-function rows(watchlist, stats, names) {
+function rows(watchlist, stats, names, listings, nowMs) {
   var list = normalizeWatchlist(watchlist)
   var out = []
   for (var i = 0; i < list.length; i++) {
     var id = list[i]
     var s = statsFor(stats, id)
     var name = displayName(names, id)
+    var days = listings && hasOwn(listings, id) ? listingDays(nowMs, listings[id]) : 0
+    var rated = s.known && days > 0
+    // The strings the panel draws are built here, not in the QML, because the
+    // columns are sized by counting their characters — measuring anything the
+    // panel then renders differently would leave the numbers misaligned.
     out.push({
       id: id,
       name: name,
@@ -160,7 +252,17 @@ function rows(watchlist, stats, names) {
       views: s.views,
       copies: s.copies,
       hearts: s.hearts,
-      known: s.known
+      known: s.known,
+      days: days,
+      perDay: rated ? viewsPerDay(s.views, days) : 0,
+      rated: rated,
+      // An em dash, not a zero: a plugin the marketplace has never heard of has
+      // no views, which is a different fact from having none yet — and a
+      // first-party plugin has no listing date to average over at all.
+      viewsText: s.known ? formatCount(s.views) : "—",
+      copiesText: s.known ? formatCount(s.copies) : "—",
+      heartsText: s.known ? formatCount(s.hearts) : "—",
+      rateText: rated ? formatRate(viewsPerDay(s.views, days)) : "—"
     })
   }
   out.sort(function(a, b) {
@@ -186,15 +288,16 @@ function formatCount(value) {
   return out
 }
 
-// How wide one column of numbers has to be, in digits. The bar font is
-// monospaced, so this is all it takes to have the three columns line up down
-// the panel without measuring every row — and to keep them no wider than the
-// numbers actually in them.
-function maxDigits(rowList, key) {
+// How wide one column has to be, in characters. The bar font is monospaced, so
+// this is all it takes to have the columns line up down the panel without
+// measuring every row — and to keep them no wider than the values in them.
+// `key` names one of the `*Text` fields on a row, so what is counted is exactly
+// what is drawn.
+function maxChars(rowList, key) {
   var most = 1
   if (!Array.isArray(rowList)) return most
   for (var i = 0; i < rowList.length; i++) {
-    var text = formatCount(rowList[i] ? rowList[i][key] : 0)
+    var text = rowList[i] ? String(rowList[i][key] || "") : ""
     if (text.length > most) most = text.length
   }
   return most
