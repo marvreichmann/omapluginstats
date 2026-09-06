@@ -298,9 +298,20 @@ test("relativeAge says how stale the numbers are", () => {
 })
 
 test("fetchError turns curl's exit code into something actionable", () => {
-  assert.equal(Model.fetchError(0), "")
-  assert.equal(Model.fetchError(6), "Cannot resolve api.omarchyplugins.com")
-  assert.equal(Model.fetchError(28), "The marketplace API timed out")
+  // Every code the switch names, so a reworded message cannot slip through on
+  // the strength of its neighbours being tested.
+  const messages = {
+    0: "",
+    6: "Cannot resolve api.omarchyplugins.com",
+    7: "Cannot reach the marketplace API",
+    22: "The marketplace API refused the request",
+    28: "The marketplace API timed out",
+    35: "TLS handshake with the marketplace API failed",
+    60: "TLS handshake with the marketplace API failed"
+  }
+  for (const code of Object.keys(messages)) {
+    assert.equal(Model.fetchError(Number(code)), messages[code], "curl exit " + code)
+  }
   assert.match(Model.fetchError(99), /curl exit 99/)
 })
 
@@ -385,8 +396,13 @@ test("rows break ties by name and then by id", () => {
     "c.other": { views: 10, copies: 0, hearts: 0 }
   }
   const names = { "b.same": "Alpha", "a.same": "Alpha" }
-  const rows = Model.rows(["c.other", "b.same", "a.same"], stats, names, {}, NOW)
-  assert.deepEqual(rows.map((r) => r.id), ["a.same", "b.same", "c.other"])
+  const expected = ["a.same", "b.same", "c.other"]
+  const watchlist = ["c.other", "b.same", "a.same"]
+  assert.deepEqual(Model.rows(watchlist, stats, names, {}, NOW).map((r) => r.id), expected)
+  // The same rows in the opposite order have to land the same way: a watchlist
+  // is in the order the user added to it, and the panel's order must not be.
+  assert.deepEqual(Model.rows(watchlist.slice().reverse(), stats, names, {}, NOW)
+    .map((r) => r.id), expected)
 })
 
 test("maxChars copes with a key a row does not carry", () => {
