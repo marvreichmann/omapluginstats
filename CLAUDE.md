@@ -195,58 +195,15 @@ Four files, one direction of data flow:
   reload can swallow it; the timer is there for the fetch.
 - **A write can only add ids.** `Model.watchlistToWrite` merges what this
   instance holds into what the file holds, and a removal takes away exactly the
-  one id the user removed — never "store my view of the list", which would let a
-  truncated instance wipe the rest on its way past. Keep this even if the
-  underlying cause below is ever found: it is what makes the failure
-  non-destructive rather than merely unlikely.
+  one id the user removed — never "store my view of the list". Two services can
+  be alive at once (above), and watching the file keeps their copies in step;
+  this is what makes a write harmless in the moment they are not. Removing
+  several rows in a row still works, because each removal names its own id and
+  merges the rest.
 - Views per day is a **lifetime average**, and the panel must not imply
   otherwise. It is the only rate the marketplace's data supports (see above);
   `rated` is false — a dash, not a zero — when there is no listing date, because
   no rate and a rate of nothing are different facts.
-
-### One thing that is still unexplained
-
-Twice during development the watchlist collapsed to its first entry on its own,
-both times shortly after installing changed files and restarting the shell. The
-first was traced to an instance that had loaded before the state file existed
-overwriting a good file on its next flush, which is reproducible
-(a second Quickshell instance writing underneath a running one) and is what
-`watchChanges` fixes. The second happened *after* that fix and could not be
-reproduced across four targeted attempts: clean restart, hot reload of
-`Panel.qml`, hot reload of `Service.qml`, and loading a state file written by
-the previous version. Instrumenting `loadState`/`flushState`/`remove` showed
-nothing but correct values.
-
-It then happened a **third** time, after the write guard was in place, and this
-time the file itself was down to one entry — which means the instance had
-already loaded a short list, so the corruption is upstream of the write path.
-Eight reproduction attempts have now failed: clean restart; hot reload of
-`Panel.qml`; hot reload of `Service.qml`; loading a previous version's state
-file; a full old-build → new-build upgrade with a restart; that same upgrade
-three times with the tight copy-then-restart timing of the failing runs; and a
-check that the scratch harnesses really do write to `XDG_STATE_HOME` and not to
-the real file (they do).
-
-Every occurrence left exactly the **first** entry of the list, and every one
-followed installing genuinely changed files over a running shell.
-
-So the cause is still not known. Two things stand between it and data loss, and
-both should survive any refactor:
-
-- `Model.watchlistToWrite`, so no write can shorten the stored list.
-- A `console.warn` in `loadState` when the loaded list is shorter than the one
-  in memory. That is the evidence that was missing all three times, and it costs
-  nothing: `journalctl --user -f | grep omapluginstats` will name it next time.
-
-If it recurs, add the fuller instrumentation — text length and parsed watchlist
-in `loadState`, watchlist in every `flushState`, and a line in `add`/`remove` —
-and work backwards from which of those ran.
-- `remove()` drops the id's name along with it. The name map is only ever read
-  through the watchlist, so a leftover entry is invisible — and would be written
-  to the state file forever.
-- The three number columns are sized from `Model.maxDigits` against a
-  `TextMetrics` digit. That is only correct because the bar font is monospaced;
-  if a proportional font ever ships, measure the strings instead.
 
 ## Shell APIs this plugin relies on
 

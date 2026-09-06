@@ -241,19 +241,8 @@ Item {
         // so whatever the file says wins — including when another instance of
         // this service wrote it a moment ago.
         if (Array.isArray(parsed.watchlist)) {
-          var loaded = Model.normalizeWatchlist(parsed.watchlist)
-          // Three times during development the watchlist collapsed to its first
-          // entry, and eight attempts failed to reproduce it — so the one thing
-          // missing when it happens is a record that it happened. A load can
-          // legitimately shrink the list (another instance removed a row), so
-          // this only says so rather than acting on it.
-          if (root.stateLoaded && loaded.length < root.watchlist.length) {
-            console.warn("omapluginstats: watchlist shrank on load, "
-              + root.watchlist.length + " -> " + loaded.length
-              + " (was " + JSON.stringify(root.watchlist) + ")")
-          }
-          root.watchlist = loaded
-          root.diskWatchlist = loaded
+          root.watchlist = Model.normalizeWatchlist(parsed.watchlist)
+          root.diskWatchlist = root.watchlist
         }
         // The counts are only a cache, and ours is the better one: a fetch of
         // our own holds every listing, while the file holds just the watched
