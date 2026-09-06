@@ -443,6 +443,10 @@ Panel {
             foreground: root.foreground
             fontFamily: root.fontFamily
             fontSize: Style.font.bodySmall
+            // Button sizes itself to its tallest content, and the icon defaults
+            // to Style.font.icon — larger than the label. Left alone, the two
+            // buttons carrying a mark come out taller than Close.
+            iconSize: Style.font.bodySmall
             // U+F0415 nf-md-plus
             iconText: "\udb81\udc15"
             tooltipText: "Add a plugin id to the watchlist"
@@ -460,6 +464,7 @@ Panel {
             foreground: root.foreground
             fontFamily: root.fontFamily
             fontSize: Style.font.bodySmall
+            iconSize: Style.font.bodySmall
             // U+F0450 nf-md-refresh
             iconText: "\udb81\udc50"
             iconSpinning: root.service ? root.service.loading : false

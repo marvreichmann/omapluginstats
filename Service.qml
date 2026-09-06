@@ -65,7 +65,7 @@ Item {
     var next = Model.addToWatchlist(watchlist, id)
     if (next.length === watchlist.length) return false
     watchlist = next
-    saveTimer.restart()
+    flushState()
     // A newly added id is usually already in the response we are holding, in
     // which case its row is populated before the user's finger leaves the key.
     if (!Model.statsFor(stats, id).known) refresh()
@@ -82,7 +82,7 @@ Item {
     var trimmed = ({})
     for (var i = 0; i < next.length; i++) if (names[next[i]] !== undefined) trimmed[next[i]] = names[next[i]]
     names = trimmed
-    saveTimer.restart()
+    flushState()
   }
 
   function setName(id, name) {
@@ -176,11 +176,19 @@ Item {
     try {
       var parsed = JSON.parse(text)
       if (parsed) {
+        // The watchlist is the user's own data and the file is where it lives,
+        // so whatever the file says wins — including when another instance of
+        // this service wrote it a moment ago.
         if (Array.isArray(parsed.watchlist)) root.watchlist = Model.normalizeWatchlist(parsed.watchlist)
-        var cached = Model.normalizeStats(parsed.stats)
-        if (cached) root.stats = cached
+        // The counts are only a cache, and ours is the better one: a fetch of
+        // our own holds every listing, while the file holds just the watched
+        // ones. Take the file's copy only when it is the newer of the two.
         var at = Number(parsed.fetchedAt)
-        if (Number.isFinite(at) && at > 0) root.fetchedAt = at
+        if (Number.isFinite(at) && at > root.fetchedAt) {
+          var cached = Model.normalizeStats(parsed.stats)
+          if (cached) root.stats = cached
+          root.fetchedAt = at
+        }
       }
     } catch (e) {
       // No file, or a corrupt one: an empty watchlist is the correct starting
@@ -201,13 +209,21 @@ Item {
     }, null, 2) + "\n")
   }
 
+  // Watched, not read once. Two of these services can be alive at the same
+  // moment — a shell restart overlaps the outgoing one, and a plugin reload
+  // rebuilds the service under a running shell — and without this the instance
+  // that started first keeps an empty watchlist and destroys the real one with
+  // its next flush. Adopting the file instead makes the last writer win.
   FileView {
     id: stateFile
     path: root.statePath
-    watchChanges: false
+    watchChanges: true
     atomicWrites: true
     printErrors: false
     onLoaded: root.loadState(text())
+    // The text carried by the change signal is the stale one, so both paths go
+    // through reload() → onLoaded to parse what is actually on disk now.
+    onFileChanged: reload()
     // First run: the file does not exist yet. Without this branch `stateLoaded`
     // never flips and nothing is ever written.
     onLoadFailed: root.loadState("")

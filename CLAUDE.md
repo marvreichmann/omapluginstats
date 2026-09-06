@@ -148,6 +148,21 @@ Four files, one direction of data flow:
 - Only the watched ids are persisted (`Model.pickStats`). Writing the whole
   response would put 160 KB of unrelated plugins in the state file on every
   fetch.
+- **Two of these services can be alive at once** — a shell restart overlaps the
+  outgoing shell, and editing an installed file rebuilds the plugin under a
+  running one. The state file is therefore watched (`watchChanges: true` +
+  `onFileChanged: reload()`), not read once. Without that, an instance that
+  loaded before the file existed keeps an empty watchlist and destroys the real
+  one on its next flush — and every successful fetch is a flush, so it happens
+  without the user touching anything. `tests/` cannot see this; the repro is a
+  second Quickshell instance writing the file underneath a running one.
+- `loadState` adopts the file's watchlist unconditionally (it is the user's
+  data, and the file is where it lives) but takes its cached counts only when
+  `fetchedAt` is newer than ours — a fetch of our own holds every listing, the
+  file only the watched ones.
+- `add()` and `remove()` flush immediately rather than through `saveTimer`. A
+  discrete user action must not sit in a debounce window where an external
+  reload can swallow it; the timer is there for the fetch.
 - `remove()` drops the id's name along with it. The name map is only ever read
   through the watchlist, so a leftover entry is invisible — and would be written
   to the state file forever.
