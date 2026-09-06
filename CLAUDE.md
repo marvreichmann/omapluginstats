@@ -217,10 +217,30 @@ reproduced across four targeted attempts: clean restart, hot reload of
 the previous version. Instrumenting `loadState`/`flushState`/`remove` showed
 nothing but correct values.
 
-So the cause is not known, and the guard above is what stands between it and
-data loss. If it happens again, the fastest evidence is that instrumentation:
-log the text length and parsed watchlist in `loadState`, and the watchlist in
-every `flushState`, then reproduce with `journalctl --user -f | grep`.
+It then happened a **third** time, after the write guard was in place, and this
+time the file itself was down to one entry — which means the instance had
+already loaded a short list, so the corruption is upstream of the write path.
+Eight reproduction attempts have now failed: clean restart; hot reload of
+`Panel.qml`; hot reload of `Service.qml`; loading a previous version's state
+file; a full old-build → new-build upgrade with a restart; that same upgrade
+three times with the tight copy-then-restart timing of the failing runs; and a
+check that the scratch harnesses really do write to `XDG_STATE_HOME` and not to
+the real file (they do).
+
+Every occurrence left exactly the **first** entry of the list, and every one
+followed installing genuinely changed files over a running shell.
+
+So the cause is still not known. Two things stand between it and data loss, and
+both should survive any refactor:
+
+- `Model.watchlistToWrite`, so no write can shorten the stored list.
+- A `console.warn` in `loadState` when the loaded list is shorter than the one
+  in memory. That is the evidence that was missing all three times, and it costs
+  nothing: `journalctl --user -f | grep omapluginstats` will name it next time.
+
+If it recurs, add the fuller instrumentation — text length and parsed watchlist
+in `loadState`, watchlist in every `flushState`, and a line in `add`/`remove` —
+and work backwards from which of those ran.
 - `remove()` drops the id's name along with it. The name map is only ever read
   through the watchlist, so a leftover entry is invisible — and would be written
   to the state file forever.
@@ -263,7 +283,11 @@ Worth knowing, because guessing at them is how the first version broke:
 
 ## Before publishing
 
-Reference: <https://plugins.omarchy.org/publish.html>.
+References: <https://plugins.omarchy.org/publish.html> for the rules, and
+`.github/ISSUE_TEMPLATE/submit-plugin.yml` in
+<https://github.com/omacom/omarchy-plugin-marketplace> for what the submission
+actually asks — that form is the real specification, and it asks for more than
+the publish page does.
 
 `omarchy plugin validate <folder>` mirrors the checks the shell itself enforces
 — schemaVersion, required fields, safe relative entry points that exist, an
@@ -275,6 +299,31 @@ so verify those by hand:
   `license` value matching what `LICENSE` actually says.
 - `README.md`, `LICENSE` and `preview.png` at the repository root.
 - `homepage` pointing at the public repository.
+- No `omarchy.clonedFrom` key: it is a development-only field the publish page
+  says to strip.
+
+The submission is a GitHub issue on the marketplace repository, and its
+checklist contains four claims that have to be true of the repository before it
+can honestly be ticked:
+
+- **Installation *and removal* instructions.** README has both; the removal
+  section names the one state file this plugin leaves behind.
+- **License and external dependencies documented.** `curl`, `grep` and a POSIX
+  `sh` — the pipeline in `listingsProc` is the only reason the last two are
+  there, so if that ever becomes a QML-side parse, the README changes with it.
+- **You own the preview assets.** `preview.png` is the panel and nothing else,
+  composited onto a flat backdrop. Do not ship a desktop screenshot: the earlier
+  ones had a browser behind the panel, which is both somebody else's content and
+  a look at the author's screen. Rebuild it by cropping the panel out of a
+  `grim` capture (its accent border makes the rectangle easy to find by scanning
+  a row and a column for accent-coloured pixels) and compositing:
+  `magick -size 1200x760 xc:'#0b0b0b' panel.png -gravity center -composite`.
+- **Does not overwrite user configuration without consent.** It writes one file,
+  `$XDG_STATE_HOME/omarchy/omapluginstats.json`, and nothing else. Keep it that
+  way; `shell.json` in particular is the user's, not ours.
+
+The form also wants a category and up to three tags from fixed lists. For this
+plugin: category **Developer Tools**; tags **Bar** and **Quickshell**.
 
 ## Releasing
 

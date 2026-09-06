@@ -2,7 +2,10 @@
 
 // Pure functions behind the panel. Everything here is decidable from its
 // arguments alone, which is what makes it testable without a running shell —
-// see tests/model.test.js.
+// see tests/model.test.js. Anything in Service.qml or Panel.qml that amounts to
+// a decision rather than a binding belongs here.
+
+// ------------------------------------------------------------------- basics
 
 // The marketplace's own id rule, copied from its assets/js/engagement.js. An id
 // this plugin accepts is therefore exactly one the API will answer for, and the
@@ -30,6 +33,50 @@ function safeCount(value) {
   var count = Math.trunc(Number(value))
   return Number.isSafeInteger(count) && count >= 0 ? count : 0
 }
+
+// --------------------------------------------------------------------- maps
+//
+// The service keeps three id-keyed maps — counts, names, listing dates — and
+// QML only notices a `var` property changing when it is reassigned, so each of
+// these returns a new object rather than editing one in place.
+
+// Keep only the entries whose key is a plugin id in `ids`. Every map is narrowed
+// to the watchlist before it is stored, so dropping a plugin drops everything
+// remembered about it rather than leaving an entry in the file forever.
+function pickMap(map, ids) {
+  var out = {}
+  if (!map || !Array.isArray(ids)) return out
+  for (var i = 0; i < ids.length; i++) {
+    var id = ids[i]
+    if (validPluginId(id) && hasOwn(map, id)) out[id] = map[id]
+  }
+  return out
+}
+
+function mergeMaps(base, extra) {
+  var out = {}
+  var key
+  for (key in base) if (hasOwn(base, key)) out[key] = base[key]
+  for (key in extra) if (hasOwn(extra, key)) out[key] = extra[key]
+  return out
+}
+
+// Set one entry, or drop it when the value is empty — an absent name and a name
+// of "" mean the same thing here, and only one of them should reach the file.
+function withEntry(map, key, value) {
+  var out = {}
+  for (var k in map) if (hasOwn(map, k)) out[k] = map[k]
+  if (value === "" || value === null || value === undefined) delete out[key]
+  else out[key] = value
+  return out
+}
+
+function isEmptyMap(map) {
+  for (var key in map) if (hasOwn(map, key)) return false
+  return true
+}
+
+// -------------------------------------------------------------------- stats
 
 // An id-to-counts map, keeping only the entries that are shaped like one.
 // Returns null — not an empty map — for anything unreadable, so the caller can
@@ -63,19 +110,6 @@ function parseStats(text) {
   return normalizeStats(payload ? payload.plugins : null)
 }
 
-// The response carries every listing on the marketplace — some 2500 of them.
-// Only the watched ones are worth persisting, so the state file stays a few
-// hundred bytes instead of 160 KB of plugins nobody here asked about.
-function pickStats(stats, ids) {
-  var out = {}
-  if (!stats || !Array.isArray(ids)) return out
-  for (var i = 0; i < ids.length; i++) {
-    var id = ids[i]
-    if (validPluginId(id) && hasOwn(stats, id)) out[id] = stats[id]
-  }
-  return out
-}
-
 // `known` separates "the marketplace reports zero" from "the marketplace has
 // never heard of this id" — a typo'd id otherwise reads as a real listing that
 // nobody has ever opened.
@@ -92,6 +126,8 @@ function statsFor(stats, id) {
   return { views: 0, copies: 0, hearts: 0, known: false }
 }
 
+// ---------------------------------------------------------------- watchlist
+
 function normalizeWatchlist(list) {
   var out = []
   if (!Array.isArray(list)) return out
@@ -102,8 +138,8 @@ function normalizeWatchlist(list) {
   return out
 }
 
-// Returns the same list when the id is invalid or already watched, so callers
-// can compare identity to decide whether anything needs saving.
+// Returns a list of the same length when the id is invalid or already watched,
+// so callers can compare lengths to decide whether anything needs saving.
 function addToWatchlist(list, id) {
   var current = normalizeWatchlist(list)
   var trimmed = typeof id === "string" ? id.replace(/^\s+|\s+$/g, "") : ""
@@ -145,6 +181,8 @@ function watchlistToWrite(current, onDisk, removedId) {
   return next
 }
 
+// -------------------------------------------------------------------- names
+
 // The stats endpoint knows ids, not names. A watched plugin that happens to be
 // installed has its name sitting in its own manifest, which is where the panel
 // gets one; anything else is shown by id.
@@ -166,6 +204,8 @@ function displayName(names, id) {
   }
   return key
 }
+
+// ------------------------------------------------------------ listing dates
 
 // Listing dates, read out of the marketplace catalog. The catalog is 6.3 MB of
 // pretty-printed JSON — far too much to hand to the QML engine for three dozen
@@ -196,6 +236,31 @@ function parseListingDates(text) {
   return out
 }
 
+function missingListings(watchlist, listings) {
+  var out = []
+  var list = normalizeWatchlist(watchlist)
+  for (var i = 0; i < list.length; i++) {
+    if (!listings || !hasOwn(listings, list[i])) out.push(list[i])
+  }
+  return out
+}
+
+// Downloading the catalog is the most expensive thing this plugin does, so it
+// only happens when a watched plugin has no date and the last attempt is old
+// enough. Some ids never get one — a first-party plugin has no listing, and a
+// typo has no listing either — so without the retry window the panel would
+// fetch 830 KB every time it opened, forever, chasing a date that will never
+// arrive.
+function shouldFetchListings(watchlist, listings, checkedAt, nowMs, retryMs) {
+  if (missingListings(watchlist, listings).length === 0) return false
+  var last = Number(checkedAt)
+  if (!Number.isFinite(last) || last <= 0) return true
+  var since = Number(nowMs) - last
+  // A clock that has moved backwards must not lock the fetch out indefinitely.
+  if (!Number.isFinite(since) || since < 0) return true
+  return since >= Number(retryMs)
+}
+
 // Days the listing has been up, counted inclusively — a plugin listed this
 // morning has been listed for one day, not zero, and dividing by zero views per
 // day helps nobody. Returns 0 for "no listing date", which is a different thing
@@ -217,62 +282,7 @@ function viewsPerDay(views, days) {
   return days > 0 ? safeCount(views) / days : 0
 }
 
-// One decimal below ten, none above: the difference between 2.1 and 2.4 a day
-// is worth seeing, the difference between 137 and 137.4 is noise.
-function formatRate(value) {
-  var rate = Number(value)
-  if (!Number.isFinite(rate) || rate < 0) return "0.0"
-  // Round before choosing the format, not after: 9.96 rounds to 10, and
-  // deciding first would print it as "10.0" among a column of bare integers.
-  var rounded = Math.round(rate * 10) / 10
-  return rounded >= 10 ? String(Math.round(rounded)) : rounded.toFixed(1)
-}
-
-// One row per watched plugin, most-viewed first. Views are the ranking because
-// they are the number that moves: a listing collects them without anyone
-// deciding to act, so ordering by anything else leaves the busiest plugin
-// somewhere in the middle of the list.
-function rows(watchlist, stats, names, listings, nowMs) {
-  var list = normalizeWatchlist(watchlist)
-  var out = []
-  for (var i = 0; i < list.length; i++) {
-    var id = list[i]
-    var s = statsFor(stats, id)
-    var name = displayName(names, id)
-    var days = listings && hasOwn(listings, id) ? listingDays(nowMs, listings[id]) : 0
-    var rated = s.known && days > 0
-    // The strings the panel draws are built here, not in the QML, because the
-    // columns are sized by counting their characters — measuring anything the
-    // panel then renders differently would leave the numbers misaligned.
-    out.push({
-      id: id,
-      name: name,
-      // Only worth showing under the name when it is not the name already.
-      subtitle: name === id ? "" : id,
-      views: s.views,
-      copies: s.copies,
-      hearts: s.hearts,
-      known: s.known,
-      days: days,
-      perDay: rated ? viewsPerDay(s.views, days) : 0,
-      rated: rated,
-      // An em dash, not a zero: a plugin the marketplace has never heard of has
-      // no views, which is a different fact from having none yet — and a
-      // first-party plugin has no listing date to average over at all.
-      viewsText: s.known ? formatCount(s.views) : "—",
-      copiesText: s.known ? formatCount(s.copies) : "—",
-      heartsText: s.known ? formatCount(s.hearts) : "—",
-      rateText: rated ? formatRate(viewsPerDay(s.views, days)) : "—"
-    })
-  }
-  out.sort(function(a, b) {
-    if (a.views !== b.views) return b.views - a.views
-    if (a.name !== b.name) return a.name < b.name ? -1 : 1
-    return a.id < b.id ? -1 : 1
-  })
-  return out
-}
-
+// --------------------------------------------------------------- formatting
 
 // Exact counts, grouped for reading. A stats panel that rounds 1049 to "1k" is
 // hiding the digit you opened it for.
@@ -286,6 +296,17 @@ function formatCount(value) {
     out += text.charAt(i)
   }
   return out
+}
+
+// One decimal below ten, none above: the difference between 2.1 and 2.4 a day
+// is worth seeing, the difference between 137 and 137.4 is noise.
+function formatRate(value) {
+  var rate = Number(value)
+  if (!Number.isFinite(rate) || rate < 0) return "0.0"
+  // Round before choosing the format, not after: 9.96 rounds to 10, and
+  // deciding first would print it as "10.0" among a column of bare integers.
+  var rounded = Math.round(rate * 10) / 10
+  return rounded >= 10 ? String(Math.round(rounded)) : rounded.toFixed(1)
 }
 
 // How wide one column has to be, in characters. The bar font is monospaced, so
@@ -322,6 +343,64 @@ function relativeAge(nowMs, thenMs) {
   if (hours < 24) return "updated " + hours + (hours === 1 ? " hour ago" : " hours ago")
   var days = Math.round(delta / 86400000)
   return "updated " + days + (days === 1 ? " day ago" : " days ago")
+}
+
+// --------------------------------------------------------------------- rows
+
+// One row per watched plugin, most-viewed first. Views are the ranking because
+// they are the number that moves: a listing collects them without anyone
+// deciding to act, so ordering by anything else leaves the busiest plugin
+// somewhere in the middle of the list.
+function rows(watchlist, stats, names, listings, nowMs) {
+  var list = normalizeWatchlist(watchlist)
+  var out = []
+  for (var i = 0; i < list.length; i++) {
+    var id = list[i]
+    var s = statsFor(stats, id)
+    var name = displayName(names, id)
+    var days = listings && hasOwn(listings, id) ? listingDays(nowMs, listings[id]) : 0
+    var rated = s.known && days > 0
+    // The strings the panel draws are built here, not in the QML, because the
+    // columns are sized by counting their characters — measuring anything the
+    // panel then renders differently would leave the numbers misaligned. An em
+    // dash rather than a zero: a plugin the marketplace has never heard of has
+    // no views, which is a different fact from having none yet, and a
+    // first-party plugin has no listing date to average over at all.
+    out.push({
+      id: id,
+      name: name,
+      // Only worth showing under the name when it is not the name already.
+      subtitle: name === id ? "" : id,
+      views: s.views,
+      copies: s.copies,
+      hearts: s.hearts,
+      known: s.known,
+      days: days,
+      rated: rated,
+      viewsText: s.known ? formatCount(s.views) : "—",
+      copiesText: s.known ? formatCount(s.copies) : "—",
+      heartsText: s.known ? formatCount(s.hearts) : "—",
+      rateText: rated ? formatRate(viewsPerDay(s.views, days)) : "—"
+    })
+  }
+  out.sort(function(a, b) {
+    if (a.views !== b.views) return b.views - a.views
+    if (a.name !== b.name) return a.name < b.name ? -1 : 1
+    return a.id < b.id ? -1 : 1
+  })
+  return out
+}
+
+// ----------------------------------------------------------------- messages
+
+// The hero's status line: what the panel is showing, and how old it is. An
+// error outranks the count, because numbers sitting there with no note beside
+// them read as current ones.
+function summaryLine(rowCount, loading, lastError, fetchedAt, nowMs) {
+  if (loading) return "Fetching…"
+  if (lastError) return String(lastError)
+  if (!rowCount) return "No plugins watched yet"
+  return pluralize(rowCount, "plugin") + " · " + relativeAge(nowMs, fetchedAt)
 }
 
 // curl's own exit codes, narrowed to the ones this single request can produce.

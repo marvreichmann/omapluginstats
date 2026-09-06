@@ -75,10 +75,52 @@ test("statsFor separates zero from unlisted", () => {
     { views: 0, copies: 0, hearts: 0, known: false })
 })
 
-test("pickStats keeps only the watched ids", () => {
+// --- the id-keyed maps ------------------------------------------------------
+
+test("pickMap keeps only the entries asked for", () => {
   const stats = Model.parseStats(RESPONSE)
-  const picked = Model.pickStats(stats, ["37signals.hey", "typo.no-such-plugin"])
-  assert.deepEqual(Object.keys(picked), ["37signals.hey"])
+  // What is stored is narrowed to the watchlist, so an id nobody watches — or
+  // one the response never carried — must not survive the trip to disk.
+  assert.deepEqual(Object.keys(Model.pickMap(stats, ["37signals.hey", "typo.no-such-plugin"])),
+    ["37signals.hey"])
+  assert.deepEqual(Model.pickMap({ "a.one": 1 }, ["not an id"]), {})
+  assert.deepEqual(Model.pickMap(null, ["a.one"]), {})
+  assert.deepEqual(Model.pickMap({ "a.one": 1 }, "a.one"), {})
+})
+
+test("mergeMaps lets the newer map win without touching either", () => {
+  const base = { "a.one": "x", "b.two": "y" }
+  const merged = Model.mergeMaps(base, { "b.two": "z", "c.three": "w" })
+  assert.deepEqual(merged, { "a.one": "x", "b.two": "z", "c.three": "w" })
+  // QML only notices a var property changing when it is reassigned, so these
+  // must return a new object rather than edit one in place.
+  assert.deepEqual(base, { "a.one": "x", "b.two": "y" })
+  assert.notEqual(merged, base)
+})
+
+test("withEntry treats an empty value as a removal", () => {
+  const map = { "a.one": "Name" }
+  assert.deepEqual(Model.withEntry(map, "b.two", "Other"), { "a.one": "Name", "b.two": "Other" })
+  // An absent name and a name of "" mean the same thing; only one of them
+  // should ever reach the state file.
+  assert.deepEqual(Model.withEntry(map, "a.one", ""), {})
+  assert.deepEqual(Model.withEntry(map, "a.one", undefined), {})
+  assert.deepEqual(map, { "a.one": "Name" })
+})
+
+test("isEmptyMap tells an empty answer from no answer", () => {
+  assert.equal(Model.isEmptyMap({}), true)
+  assert.equal(Model.isEmptyMap({ "a.one": 1 }), false)
+})
+
+test("normalizeStats is reused for the cached copy in the state file", () => {
+  // loadState feeds it the map straight out of the file rather than a response
+  // body, so it has to hold up on its own.
+  assert.deepEqual(Model.normalizeStats({ "a.one": { views: 5, copies: 1, hearts: 0 } }),
+    { "a.one": { views: 5, copies: 1, hearts: 0 } })
+  assert.equal(Model.normalizeStats(null), null)
+  assert.equal(Model.normalizeStats([]), null)
+  assert.equal(Model.normalizeStats("{}"), null)
 })
 
 test("addToWatchlist refuses duplicates and junk, and says so by identity", () => {
@@ -265,4 +307,89 @@ test("fetchError turns curl's exit code into something actionable", () => {
 test("pluralize keeps the hero line grammatical", () => {
   assert.equal(Model.pluralize(1, "plugin"), "1 plugin")
   assert.equal(Model.pluralize(3, "plugin"), "3 plugins")
+})
+
+// --- decisions the QML used to make -----------------------------------------
+
+test("shouldFetchListings only downloads the catalog when it can help", () => {
+  const watchlist = ["a.one", "b.two"]
+  const complete = { "a.one": "2026-09-01T00:00:00.000Z", "b.two": "2026-09-01T00:00:00.000Z" }
+  const day = 24 * 60 * 60 * 1000
+
+  // Nothing missing: never, however long ago it was checked.
+  assert.equal(Model.shouldFetchListings(watchlist, complete, 0, NOW, day), false)
+  // Missing and never checked.
+  assert.equal(Model.shouldFetchListings(watchlist, {}, 0, NOW, day), true)
+  // Missing but checked a moment ago. Some ids never get a date — a first-party
+  // plugin has no listing — so this is what stops the panel re-downloading
+  // 830 KB on every open for the rest of time.
+  assert.equal(Model.shouldFetchListings(watchlist, { "a.one": "2026-09-01T00:00:00.000Z" },
+    NOW - 60_000, NOW, day), false)
+  // Missing and the window has passed.
+  assert.equal(Model.shouldFetchListings(watchlist, {}, NOW - day - 1, NOW, day), true)
+  // A clock that moved backwards must not lock the fetch out indefinitely.
+  assert.equal(Model.shouldFetchListings(watchlist, {}, NOW + day, NOW, day), true)
+})
+
+test("missingListings names the ids still without a date", () => {
+  assert.deepEqual(Model.missingListings(["a.one", "b.two"], { "a.one": "2026-09-01T00:00:00.000Z" }),
+    ["b.two"])
+  assert.deepEqual(Model.missingListings(["a.one"], null), ["a.one"])
+  assert.deepEqual(Model.missingListings([], {}), [])
+})
+
+test("summaryLine puts a problem ahead of a number", () => {
+  const fetched = NOW - 5 * 60_000
+  assert.equal(Model.summaryLine(3, false, "", fetched, NOW), "3 plugins · updated 5 min ago")
+  assert.equal(Model.summaryLine(1, false, "", fetched, NOW), "1 plugin · updated 5 min ago")
+  assert.equal(Model.summaryLine(0, false, "", fetched, NOW), "No plugins watched yet")
+  // Numbers sitting there with no note beside them read as current ones, so a
+  // failure has to outrank the count.
+  assert.equal(Model.summaryLine(3, false, "Cannot reach the marketplace API", fetched, NOW),
+    "Cannot reach the marketplace API")
+  assert.equal(Model.summaryLine(3, true, "", fetched, NOW), "Fetching…")
+})
+
+// --- odds and ends the panel leans on ---------------------------------------
+
+test("displayName falls back to the id", () => {
+  assert.equal(Model.displayName({ "a.one": "Alpha" }, "a.one"), "Alpha")
+  assert.equal(Model.displayName({ "a.one": "" }, "a.one"), "a.one")
+  assert.equal(Model.displayName({}, "a.one"), "a.one")
+  assert.equal(Model.displayName(null, "a.one"), "a.one")
+})
+
+test("statsFor survives a service that has fetched nothing yet", () => {
+  assert.deepEqual(Model.statsFor(null, "a.one"), { views: 0, copies: 0, hearts: 0, known: false })
+  assert.deepEqual(Model.statsFor({}, "not an id"), { views: 0, copies: 0, hearts: 0, known: false })
+})
+
+test("viewsPerDay refuses to divide by no days", () => {
+  assert.equal(Model.viewsPerDay(100, 4), 25)
+  assert.equal(Model.viewsPerDay(100, 0), 0)
+  assert.equal(Model.viewsPerDay(-5, 4), 0)
+})
+
+test("addToWatchlist stops at the cap", () => {
+  const full = Array.from({ length: 64 }, (_, i) => `p.${i}`)
+  assert.equal(Model.addToWatchlist(full, "one.more").length, 64)
+  assert.equal(Model.addToWatchlist(full.slice(0, 63), "one.more").length, 64)
+})
+
+test("rows break ties by name and then by id", () => {
+  // Same view count, so the order has to come from somewhere stable — two rows
+  // swapping places between refreshes would be its own kind of wrong.
+  const stats = {
+    "b.same": { views: 10, copies: 0, hearts: 0 },
+    "a.same": { views: 10, copies: 0, hearts: 0 },
+    "c.other": { views: 10, copies: 0, hearts: 0 }
+  }
+  const names = { "b.same": "Alpha", "a.same": "Alpha" }
+  const rows = Model.rows(["c.other", "b.same", "a.same"], stats, names, {}, NOW)
+  assert.deepEqual(rows.map((r) => r.id), ["a.same", "b.same", "c.other"])
+})
+
+test("maxChars copes with a key a row does not carry", () => {
+  assert.equal(Model.maxChars([{ viewsText: "12" }, {}], "viewsText"), 2)
+  assert.equal(Model.maxChars([null], "viewsText"), 1)
 })

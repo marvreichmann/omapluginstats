@@ -3,7 +3,7 @@
 Views, copies and hearts for a watchlist of plugins on the
 [Omarchy plugin marketplace](https://plugins.omarchy.org), in a bar panel.
 
-![The panel, showing five watched plugins with their view, copy and heart counts](preview.png)
+![The panel, listing five watched plugins with their views, views per day, copies and hearts](preview.png)
 
 Add the plugin ids you care about — yours, or anyone's — and the panel shows
 what the marketplace has recorded for each: how many people opened the listing,
@@ -63,10 +63,32 @@ Nothing else leaves the machine. The watchlist and the last numbers fetched are
 kept in `$XDG_STATE_HOME/omarchy/omapluginstats.json` so the panel opens with
 something to show before the next fetch returns.
 
+## Removing it
+
+```sh
+omarchy plugin remove com.github.marvreichmann.omapluginstats
+```
+
+Then take the widget out of your bar in `~/.config/omarchy/shell.json` if it is
+still listed there. The plugin writes exactly one file of its own, which is left
+behind and can go too:
+
+```sh
+rm ~/.local/state/omarchy/omapluginstats.json
+```
+
+Nothing else on the system is touched — no other configuration is written, no
+services are installed, and nothing is left running.
+
 ## Requirements
 
 - Omarchy 4.x with the Quickshell bar
-- `curl` on `PATH`
+- `curl`, `grep` and a POSIX `sh` on `PATH` — all part of a base Arch install.
+  `curl` fetches the two documents above; `grep` narrows the catalog before it
+  is parsed, and `sh` is used only to connect those two with a pipe.
+
+No other external dependencies, and no accounts, keys or tokens: both sources
+are public and read anonymously.
 
 ## License
 

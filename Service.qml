@@ -94,28 +94,18 @@ Item {
     var next = Model.removeFromWatchlist(watchlist, id)
     if (next.length === watchlist.length) return
     watchlist = next
-    // The name map is keyed by id and only ever read through the watchlist, so
-    // a stale entry is harmless — but it would otherwise be written to the
-    // state file forever.
-    var trimmed = ({})
-    var keptListings = ({})
-    for (var i = 0; i < next.length; i++) {
-      if (names[next[i]] !== undefined) trimmed[next[i]] = names[next[i]]
-      if (listings[next[i]] !== undefined) keptListings[next[i]] = listings[next[i]]
-    }
-    names = trimmed
-    listings = keptListings
+    // The name and date maps are keyed by id and only ever read through the
+    // watchlist, so a stale entry is invisible — but it would otherwise sit in
+    // the state file forever.
+    names = Model.pickMap(names, next)
+    listings = Model.pickMap(listings, next)
     flushState(String(id))
   }
 
   function setName(id, name) {
     var value = String(name || "")
     if (String(names[id] || "") === value) return
-    var next = ({})
-    for (var k in names) next[k] = names[k]
-    if (value === "") delete next[id]
-    else next[id] = value
-    names = next
+    names = Model.withEntry(names, id, value)
   }
 
   // ------------------------------------------------------------------ fetch
@@ -166,42 +156,25 @@ Item {
 
   // --------------------------------------------------------- listing dates
 
-  function missingListings() {
-    var missing = []
-    for (var i = 0; i < watchlist.length; i++) {
-      if (listings[watchlist[i]] === undefined) missing.push(watchlist[i])
-    }
-    return missing
-  }
-
   function ensureListings() {
-    if (listingsProc.running || missingListings().length === 0) return
-    if (Date.now() - listingsCheckedAt < listingsRetryMs) return
+    if (listingsProc.running) return
+    if (!Model.shouldFetchListings(watchlist, listings, listingsCheckedAt, Date.now(), listingsRetryMs)) return
     listingsProc.running = true
   }
 
   function consumeListings(text) {
     var dates = Model.parseListingDates(text)
-    var found = 0
-    var next = ({})
-    for (var k in listings) next[k] = listings[k]
-    for (var i = 0; i < watchlist.length; i++) {
-      var id = watchlist[i]
-      if (dates[id] !== undefined) {
-        next[id] = dates[id]
-        found++
-      }
-    }
     // An empty result means the pipeline produced nothing readable rather than
     // "these plugins have no dates", so it must not count as an answer — the
     // retry window would otherwise lock the panel out for a day over a blip.
-    var empty = true
-    for (var probe in dates) { empty = false; break }
-    if (empty) return
+    if (Model.isEmptyMap(dates)) return
 
-    listings = next
+    // Only the watched ids: the catalog has a date for 2500 plugins and this
+    // map is written to the state file.
+    var found = Model.pickMap(dates, watchlist)
+    listings = Model.mergeMaps(listings, found)
     listingsCheckedAt = Date.now()
-    if (found > 0) flushState()
+    if (!Model.isEmptyMap(found)) flushState()
   }
 
   Process {
@@ -268,8 +241,19 @@ Item {
         // so whatever the file says wins — including when another instance of
         // this service wrote it a moment ago.
         if (Array.isArray(parsed.watchlist)) {
-          root.watchlist = Model.normalizeWatchlist(parsed.watchlist)
-          root.diskWatchlist = root.watchlist
+          var loaded = Model.normalizeWatchlist(parsed.watchlist)
+          // Three times during development the watchlist collapsed to its first
+          // entry, and eight attempts failed to reproduce it — so the one thing
+          // missing when it happens is a record that it happened. A load can
+          // legitimately shrink the list (another instance removed a row), so
+          // this only says so rather than acting on it.
+          if (root.stateLoaded && loaded.length < root.watchlist.length) {
+            console.warn("omapluginstats: watchlist shrank on load, "
+              + root.watchlist.length + " -> " + loaded.length
+              + " (was " + JSON.stringify(root.watchlist) + ")")
+          }
+          root.watchlist = loaded
+          root.diskWatchlist = loaded
         }
         // The counts are only a cache, and ours is the better one: a fetch of
         // our own holds every listing, while the file holds just the watched
@@ -307,7 +291,7 @@ Item {
       watchlist: stored,
       // Only the watched plugins. The rest of the response is 160 KB of other
       // people's listings and would be stale by the next fetch anyway.
-      stats: Model.pickStats(root.stats, stored),
+      stats: Model.pickMap(root.stats, stored),
       fetchedAt: root.fetchedAt,
       listings: root.listings,
       listingsCheckedAt: root.listingsCheckedAt

@@ -68,13 +68,9 @@ Panel {
     return glyphWidth + Style.spacing.sm + Math.ceil(digit.advanceWidth * Model.maxChars(rows, key))
   }
 
-  readonly property string heroMeta: {
-    if (!service) return "Service unavailable"
-    if (service.loading) return "Fetching…"
-    if (service.lastError !== "") return service.lastError
-    if (rows.length === 0) return "No plugins watched yet"
-    return Model.pluralize(rows.length, "plugin") + " · " + Model.relativeAge(now, service.fetchedAt)
-  }
+  readonly property string heroMeta: service
+    ? Model.summaryLine(rows.length, service.loading, service.lastError, service.fetchedAt, now)
+    : "Service unavailable"
 
   function openFromHotkey() { root.controller.show() }
 
