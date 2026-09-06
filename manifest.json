@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "id": "com.github.marvreichmann.omapluginstats",
+  "name": "Omapluginstats",
+  "version": "0.1.0",
+  "author": "Marvin Reichmann",
+  "license": "MIT",
+  "description": "Views, copies and hearts for a watchlist of plugins on the Omarchy plugin marketplace.",
+  "homepage": "https://github.com/marvreichmann/omapluginstats",
+  "kinds": [
+    "service",
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "service": "Service.qml",
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Omapluginstats",
+    "description": "Marketplace engagement for the plugins you watch.",
+    "category": "Developer Tools",
+    "aliases": [
+      "plugin stats",
+      "marketplace",
+      "views",
+      "hearts"
+    ],
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}

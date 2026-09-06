@@ -1,0 +1,59 @@
+# Omapluginstats
+
+Views, copies and hearts for a watchlist of plugins on the
+[Omarchy plugin marketplace](https://plugins.omarchy.org), in a bar panel.
+
+![The panel, showing five watched plugins with their view, copy and heart counts](preview.png)
+
+Add the plugin ids you care about — yours, or anyone's — and the panel shows
+what the marketplace has recorded for each: how many people opened the listing,
+how many copied its install command, and how many hearted it. Rows are ranked by
+views, most-read first.
+
+## Install
+
+```sh
+omarchy plugin add https://github.com/marvreichmann/omapluginstats.git --enable
+```
+
+Then add `com.github.marvreichmann.omapluginstats` to your bar in
+`~/.config/omarchy/shell.json`, or pick "Omapluginstats" from the bar widget
+picker. The icon opens the panel; there is no counter on the bar itself.
+
+## Using it
+
+- **Watch a plugin** takes a plugin id — the `id` from its `manifest.json`,
+  which is also what its marketplace listing shows and what
+  `omarchy plugin add` installs it under. Enter adds it.
+- Hover a row and use the bin icon to stop watching it.
+- **Refresh** fetches the current numbers. Opening the panel does the same if
+  the ones on screen are more than five minutes old.
+- An id the marketplace does not know shows dashes and *Not on the
+  marketplace* — usually a typo, or a listing that has been retired.
+- A watched plugin that is also installed is shown by name, with its id
+  underneath. Everything else is shown by id, because names live in manifests
+  and the stats API only knows ids.
+
+## What it talks to
+
+One endpoint, read-only: `GET https://api.omarchyplugins.com/v1/stats`, which
+returns the counts for every listing on the marketplace in a single response.
+The watchlist is applied on this machine, so the marketplace is never told which
+plugins you are interested in.
+
+This plugin never posts to `/v1/events` — the endpoint the website uses to
+*record* a view, a copy or a heart. Reading your numbers here does not change
+them, for your plugins or anyone else's.
+
+Nothing else leaves the machine. The watchlist and the last numbers fetched are
+kept in `$XDG_STATE_HOME/omarchy/omapluginstats.json` so the panel opens with
+something to show before the next fetch returns.
+
+## Requirements
+
+- Omarchy 4.x with the Quickshell bar
+- `curl` on `PATH`
+
+## License
+
+MIT — see [LICENSE](LICENSE).
