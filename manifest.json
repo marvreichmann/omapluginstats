@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "com.github.marvreichmann.omapluginstats",
   "name": "Omapluginstats",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "author": "Marvin Reichmann",
   "license": "MIT",
   "description": "Views, views per day, copies and hearts for a watchlist of plugins on the Omarchy plugin marketplace.",

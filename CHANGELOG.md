@@ -6,7 +6,7 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-## [0.1.0] - 2026-09-06
+## [1.0.0] - 2026-09-06
 
 ### Added
 
@@ -25,5 +25,5 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Refresh on demand, and automatically when the panel is opened on numbers more
   than five minutes old.
 
-[Unreleased]: https://github.com/marvreichmann/omapluginstats/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/marvreichmann/omapluginstats/releases/tag/v0.1.0
+[Unreleased]: https://github.com/marvreichmann/omapluginstats/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/marvreichmann/omapluginstats/releases/tag/v1.0.0
