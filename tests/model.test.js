@@ -543,6 +543,19 @@ test("tickerModel pads every column to the widest value in it", () => {
   assert.equal(board.frames[1].texts.name, "B.SMALL")
 })
 
+test("tickerValueText answers only for the columns that exist", () => {
+  const row = { viewsText: "12", rateText: "1.5", copiesText: "3", heartsText: "4" }
+  assert.equal(Model.tickerValueText(row, "views"), "12")
+  assert.equal(Model.tickerValueText(row, "rate"), "1.5")
+  assert.equal(Model.tickerValueText(row, "copies"), "3")
+  assert.equal(Model.tickerValueText(row, "hearts"), "4")
+  // tickerFieldKeys cannot let a fifth key through, so these two are guards
+  // rather than paths — but they are the guards that keep a hand-edited
+  // `tickerFields` from putting `undefined` on the bar.
+  assert.equal(Model.tickerValueText(row, "nonsense"), "")
+  assert.equal(Model.tickerValueText(null, "views"), "")
+})
+
 test("tickerModel shows the panel's own strings", () => {
   // An em dash for a plugin the marketplace has never heard of, and the same
   // grouping of long numbers — the two faces of this plugin must not disagree
