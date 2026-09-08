@@ -68,6 +68,103 @@ Item {
   readonly property bool loading: statsProc.running
   readonly property bool listingsLoading: listingsProc.running
 
+  // -------------------------------------------------------------- ticker
+  //
+  // The optional bar display. It lives here rather than in the widget for the
+  // same reason the watchlist does: bar widgets are instantiated per monitor,
+  // and a board that cycled on its own timer per screen would show a different
+  // plugin on each of them.
+
+  // Whether the bar shows the board at all. Persisted — it is a choice the user
+  // made, not a session's worth of state — and adopted from the file on change
+  // like everything else here, so turning it on from one panel turns it on
+  // everywhere.
+  property bool ticker: false
+
+  // Which frame is up, and how many widgets are asking the cycle to hold still
+  // (a hovered board stops so it can be read). A count rather than a flag: two
+  // monitors can be hovered one after the other, and the second must not
+  // release the hold the first is still holding.
+  property int tickerIndex: 0
+  property int tickerHolds: 0
+
+  // Whether the cards flip, and how long one plugin stays up. Both are
+  // persisted beside the watchlist, because both are switches the user reaches
+  // for in the panel rather than settings they configure once in a file — and
+  // because a board that flipped on one monitor and slid on the other would be
+  // two boards.
+  property bool tickerFlip: true
+  property int tickerDwell: Model.tickerDwellMs(undefined)
+
+  // Set by the bar widget out of its shell.json entry — every instance carries
+  // the same layout entry, so they all write the same values, already clamped
+  // by Model before they arrive.
+  property int tickerFlapMs: Model.tickerFlapMs(undefined)
+  property bool tickerUpper: true
+  property string tickerQuiet: Model.tickerQuietMotion(undefined)
+  property int tickerPollMs: Model.tickerPollMs(undefined)
+
+  // The resolved configuration, derived here rather than in the widget: the two
+  // halves of it arrive from different places — the switch from the state file,
+  // the physics from shell.json — and only the owner of both can put them
+  // together once for every monitor.
+  readonly property string tickerMotion: Model.tickerMotionFor(tickerFlip, tickerQuiet)
+  readonly property int tickerDwellFloorMs: Model.tickerDwellFloorMs(tickerFlapMs, tickerMotion, tickerUpper)
+  readonly property int tickerCycleMs: Model.tickerCycleMs(tickerDwell, tickerFlapMs, tickerMotion, tickerUpper)
+
+  // What grew at the last fetch, so the board can point at the number that
+  // moved. Session-only and deliberately short-lived: this is "something just
+  // happened", not a statistic, and persisting it would mean a highlight
+  // surviving a reboot to describe a change from last week.
+  property var deltas: ({})
+  readonly property int deltaHoldMs: 90 * 1000
+
+  // The fetch this session's deltas are measured from. Zero until this instance
+  // has fetched once itself: the numbers loaded from the state file are a cache
+  // of unknown age, and diffing against them would light the whole board up on
+  // the first refresh after a restart.
+  property double sessionFetchedAt: 0
+
+  function setTicker(on) {
+    var next = on === true
+    if (next === ticker) return
+    ticker = next
+    flushState()
+    if (next) refreshIfStale()
+  }
+
+  function setTickerFlip(on) {
+    var next = on === true
+    if (next === tickerFlip) return
+    tickerFlip = next
+    flushState()
+  }
+
+  // A drag, not a click: the value moves continuously and only the release is
+  // the decision. setTickerDwell is the live board following the knob and
+  // writes nothing; commitTickerDwell is the user letting go.
+  function setTickerDwell(ms) {
+    tickerDwell = Model.tickerDwellMs(ms)
+  }
+
+  function commitTickerDwell(ms) {
+    setTickerDwell(ms)
+    flushState()
+  }
+
+  // Held by any widget with the cursor on it. Balanced calls: the widget
+  // releases exactly what it took.
+  function holdTicker(on) {
+    tickerHolds = Math.max(0, tickerHolds + (on ? 1 : -1))
+  }
+
+  function stepTicker(delta) {
+    tickerIndex = Model.stepIndex(tickerIndex, rows.length, delta)
+    // A deliberate step gets the full dwell from here, rather than however much
+    // was left of the frame it interrupted.
+    if (cycleTimer.running) cycleTimer.restart()
+  }
+
   // Opening the panel refreshes, but only if the numbers have had time to
   // change. Engagement counts move over hours; re-fetching 160 KB every time a
   // popup opens would be rude to a marketplace that serves this for free.
@@ -129,8 +226,18 @@ Item {
       lastError = "The marketplace API returned something unreadable"
       return
     }
+    // Against the numbers this instance last fetched, never against the ones it
+    // loaded from disk — see sessionFetchedAt.
+    if (sessionFetchedAt > 0) {
+      var moved = Model.statsDelta(stats, parsed, watchlist)
+      if (!Model.isEmptyMap(moved)) {
+        deltas = moved
+        deltaTimer.restart()
+      }
+    }
     stats = parsed
     fetchedAt = Date.now()
+    sessionFetchedAt = fetchedAt
     lastError = ""
     saveTimer.restart()
   }
@@ -253,6 +360,12 @@ Item {
           for (var id in dates) if (Model.validPluginId(id) && typeof dates[id] === "string") loaded[id] = dates[id]
           root.listings = loaded
         }
+        // The user's choice, like the watchlist: whatever the file says wins,
+        // so switching the board on in one shell switches it on in the other.
+        if (typeof parsed.ticker === "boolean") root.ticker = parsed.ticker
+        if (typeof parsed.tickerFlip === "boolean") root.tickerFlip = parsed.tickerFlip
+        var dwell = Number(parsed.tickerDwell)
+        if (Number.isFinite(dwell) && dwell > 0) root.tickerDwell = Model.tickerDwellMs(dwell)
         var checked = Number(parsed.listingsCheckedAt)
         if (Number.isFinite(checked) && checked > 0) root.listingsCheckedAt = checked
         var at = Number(parsed.fetchedAt)
@@ -282,6 +395,9 @@ Item {
       // people's listings and would be stale by the next fetch anyway.
       stats: Model.pickMap(root.stats, stored),
       fetchedAt: root.fetchedAt,
+      ticker: root.ticker,
+      tickerFlip: root.tickerFlip,
+      tickerDwell: root.tickerDwell,
       listings: root.listings,
       listingsCheckedAt: root.listingsCheckedAt
     }, null, 2) + "\n")
@@ -312,5 +428,43 @@ Item {
     interval: 400
     repeat: false
     onTriggered: root.flushState()
+  }
+
+  // --------------------------------------------------------------- ticker
+
+  // The one thing in this plugin that polls, and only while the board is on.
+  // A panel is asked for; a board is already on screen, and a board showing
+  // last night's numbers is worse than no board. Model.tickerPollMs floors this
+  // at fifteen minutes: the response is 160 KB of every listing on the
+  // marketplace, engagement counts move over hours, and the setting behind it
+  // can make this politer but not ruder.
+  Timer {
+    id: pollTimer
+    running: root.ticker && root.stateLoaded && root.watchlist.length > 0
+    interval: root.tickerPollMs
+    repeat: true
+    onTriggered: root.refresh()
+  }
+
+  // Nothing to cycle through with one plugin watched, and nothing to cycle at
+  // all while a cursor is resting on the board.
+  Timer {
+    id: cycleTimer
+    running: root.ticker && root.tickerHolds === 0 && root.rows.length > 1
+    interval: root.tickerCycleMs
+    repeat: true
+    onTriggered: root.tickerIndex = Model.stepIndex(root.tickerIndex, root.rows.length, 1)
+  }
+
+  Timer {
+    id: deltaTimer
+    interval: root.deltaHoldMs
+    repeat: false
+    onTriggered: root.deltas = ({})
+  }
+
+  // Removing a plugin shortens the board under whatever frame was up.
+  onRowsChanged: {
+    if (tickerIndex >= rows.length) tickerIndex = Model.stepIndex(tickerIndex, rows.length, 0)
   }
 }

@@ -72,6 +72,34 @@ Panel {
     ? Model.summaryLine(rows.length, service.loading, service.lastError, service.fetchedAt, now)
     : "Service unavailable"
 
+  // Said in full because turning the board on is the one thing in this plugin
+  // that starts a repeating request, and a stats reader should be the last
+  // thing on a desk to poll a free API quietly.
+  readonly property string tickerDescription: {
+    if (!service) return "Cycle the watchlist across the bar as a split-flap board."
+    var minutes = Math.round(service.tickerPollMs / 60000)
+    return "Cycle the watchlist across the bar as a split-flap board. While it is on, "
+      + "the numbers refresh every " + Model.pluralize(minutes, "minute")
+      + " — the only thing this plugin polls."
+  }
+
+  readonly property string flipDescription: {
+    if (!service) return "Turn each character over one card at a time."
+    return service.tickerQuiet === "none"
+      ? "Turn each character over one card at a time. Off, the board simply changes."
+      : "Turn each character over one card at a time. Off, the line slides up instead."
+  }
+
+  // The effective cycle, which is not always the one the slider is on: with the
+  // cards flipping, the board cannot change plugin faster than it can settle.
+  readonly property string dwellText: {
+    if (!service) return ""
+    var effective = service.tickerCycleMs
+    var asked = service.tickerDwell
+    return Model.formatSeconds(effective)
+      + (effective > asked ? " · the board's floor" : "")
+  }
+
   function openFromHotkey() { root.controller.show() }
 
   function addFromField() {
@@ -431,6 +459,116 @@ Panel {
             fontFamily: root.fontFamily
             fontSize: Style.font.bodySmall
             onClicked: root.addFromField()
+          }
+        }
+      }
+
+      // ------------------------------------------------------- bar ticker
+
+      PanelSeparator { foreground: root.foreground }
+
+      Toggle {
+        width: parent.width
+        label: "Bar ticker"
+        description: root.tickerDescription
+        checked: root.service ? root.service.ticker === true : false
+        // Nothing to cycle through with an empty watchlist, and a board that
+        // said so would be a bar widget explaining itself forever.
+        enabled: root.service !== null && root.rows.length > 0
+        // Item.enabled blocks input but paints nothing differently, so the
+        // dimming has to be explicit — the same as the footer buttons.
+        opacity: enabled ? 1.0 : 0.4
+        foreground: root.foreground
+        accent: Color.accent
+        fontFamily: root.fontFamily
+        onClicked: if (root.service && root.rows.length > 0) root.service.setTicker(!root.service.ticker)
+      }
+
+      // The board's own two controls, and only while there is a board: a panel
+      // that carried the settings for a thing that is switched off would be
+      // asking to be read past.
+      Column {
+        width: parent.width
+        spacing: Style.spacing.sm
+        visible: root.service ? root.service.ticker === true : false
+
+        Toggle {
+          width: parent.width
+          label: "Flip the cards"
+          description: root.flipDescription
+          checked: root.service ? root.service.tickerFlip === true : true
+          foreground: root.foreground
+          accent: Color.accent
+          fontFamily: root.fontFamily
+          onClicked: if (root.service) root.service.setTickerFlip(!root.service.tickerFlip)
+        }
+
+        BorderSurface {
+          id: dwellCard
+          width: parent.width
+          radius: Style.cornerRadius
+          topPadding: Style.spacing.rowPaddingX
+          bottomPadding: Style.spacing.rowPaddingX
+          leftPadding: Style.spacing.rowPaddingX
+          rightPadding: Style.spacing.rowPaddingX
+          color: Style.normalFillFor(root.foreground, Color.accent)
+          borderSpec: Border.controlSpec("normal", root.foreground, Color.accent)
+          implicitHeight: dwellColumn.implicitHeight + contentTopInset + contentBottomInset
+
+          Column {
+            id: dwellColumn
+            anchors.top: parent.top
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.topMargin: dwellCard.contentTopInset
+            anchors.leftMargin: dwellCard.contentLeftInset
+            anchors.rightMargin: dwellCard.contentRightInset
+            spacing: Style.spacing.md
+
+            Item {
+              width: parent.width
+              implicitHeight: dwellLabel.implicitHeight
+
+              Text {
+                id: dwellLabel
+                anchors.left: parent.left
+                text: "Time between plugins"
+                color: root.foreground
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.subtitle
+                font.bold: true
+                textFormat: Text.PlainText
+              }
+
+              // The value the board will actually use, not the one the slider
+              // is sitting on. With the cards flipping, a dwell under about two
+              // seconds is spent settling, and saying "1.2 s" while the board
+              // takes 1.9 would be the panel misreporting itself.
+              Text {
+                anchors.right: parent.right
+                anchors.baseline: dwellLabel.baseline
+                text: root.dwellText
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.bodySmall
+                textFormat: Text.PlainText
+              }
+            }
+
+            PanelSlider {
+              width: parent.width
+              bar: root.bar
+              integer: true
+              // The floor is where the board stops being able to keep up, so
+              // it moves when the cards are switched off and the settle stops
+              // costing anything.
+              minimum: root.service ? root.service.tickerDwellFloorMs : 1200
+              maximum: 30000
+              step: 200
+              value: root.service ? Math.max(root.service.tickerDwell, minimum) : 4200
+              onMoved: function(value) { if (root.service) root.service.setTickerDwell(value) }
+              onReleased: function(value) { if (root.service) root.service.commitTickerDwell(value) }
+            }
           }
         }
       }

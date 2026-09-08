@@ -1,9 +1,10 @@
 # Omapluginstats
 
 Views, copies and hearts for a watchlist of plugins on the
-[Omarchy plugin marketplace](https://plugins.omarchy.org), in a bar panel.
+[Omarchy plugin marketplace](https://plugins.omarchy.org), in a bar panel — and,
+if you want one, on the bar itself as a split-flap departure board.
 
-![The panel, listing five watched plugins with their views, views per day, copies and hearts](preview.png)
+![The bar ticker showing one plugin's counts on a split-flap board, above the panel listing five watched plugins with their views, views per day, copies and hearts](preview.png)
 
 Add the plugin ids you care about — yours, or anyone's — and the panel shows
 what the marketplace has recorded for each: how many people opened the listing,
@@ -19,7 +20,8 @@ omarchy plugin add https://github.com/marvreichmann/omapluginstats.git --enable
 
 Then add `com.github.marvreichmann.omapluginstats` to your bar in
 `~/.config/omarchy/shell.json`, or pick "Omapluginstats" from the bar widget
-picker. The icon opens the panel; there is no counter on the bar itself.
+picker. The icon opens the panel. Nothing is shown on the bar itself until you
+switch the ticker on.
 
 ## Using it
 
@@ -42,6 +44,69 @@ picker. The icon opens the panel; there is no counter on the bar itself.
   underneath. Everything else is shown by id, because names live in manifests
   and the stats API only knows ids.
 
+## The bar ticker
+
+Off by default. **Bar ticker** at the bottom of the panel turns it on, and it
+then cycles the watchlist across the bar — one plugin at a time, name and
+numbers, each character on its own drum of cards, flipping into place the way a
+departure board does.
+
+- **Flip the cards** and **Time between plugins**, under the switch, are the
+  board's own two controls: whether each character turns over card by card, and
+  how long a plugin stays up before the next one. With the cards flipping the
+  slider will not go below the time the board needs to settle — about two
+  seconds — because a shorter setting would change nothing.
+- **Hover it and it stops**, so you can read the frame you leaned in for.
+- **Scroll it** to step through the watchlist by hand.
+- **Clicking it still opens the panel.**
+- A number that has gone up since the last fetch is **tinted** for a minute or
+  so, so a change catches your eye rather than needing to be noticed.
+- A plugin that is not installed locally has no name to show, only its id, and
+  a long id is shortened from the *left* — `com.github.you.yourplugin` becomes
+  `YOURPLUGIN` rather than `COM.GITHUB.YO…`.
+- On a **vertical bar** the ticker stays off. A board turned on its side is not
+  a board; the panel is the whole feature there.
+
+Switching it on is also the one thing that makes this plugin poll. The rest of
+it fetches when you ask it to, but a board that is already on screen is no use
+showing last night's numbers, so while the ticker is on the counts refresh every
+15 minutes. That is the floor as well as the default: one request returns every
+listing on the marketplace, at about 160 KB, and the setting below can make it
+politer but not more frequent.
+
+### Tuning it
+
+The ticker's appearance is read from this widget's entry in
+`~/.config/omarchy/shell.json`. All of it is optional:
+
+```json
+{
+  "id": "com.github.marvreichmann.omapluginstats",
+  "tickerQuietMotion": "roll",
+  "tickerFields": ["views", "rate", "copies", "hearts"],
+  "tickerNameChars": 14,
+  "tickerUppercase": true,
+  "tickerCards": true,
+  "tickerFlapMs": 26,
+  "refreshMinutes": 15
+}
+```
+
+| Key | Default | What it does |
+|---|---|---|
+| `tickerQuietMotion` | `"roll"` | What the board does with **Flip the cards** switched off: `roll` slides the whole line up and the next one in behind it, `none` simply changes it. |
+| `tickerFields` | all four | Which numbers appear beside the name: `views`, `rate`, `copies`, `hearts`. They are always drawn in that order. |
+| `tickerNameChars` | `14` | How much of the name is shown before it is truncated. 4 to 40. |
+| `tickerUppercase` | `true` | Capitals, the way a departure board has them. `false` keeps names as written, at the cost of a longer drum and a slower settle. |
+| `tickerCards` | `true` | Draw a card behind each character. `false` leaves the seam and the motion on a flat bar. |
+| `tickerFlapMs` | `26` | How long one card takes to turn. 8 to 250 — lower is a faster, noisier board, and it also sets how fast the board can change plugin at all. |
+| `refreshMinutes` | `15` | How often the numbers are fetched while the ticker is on. 15 is the minimum. |
+
+The three things you are most likely to want to change — whether the ticker is
+on, whether it flips, and how long a plugin stays up — are deliberately *not*
+here. They are switches in the panel, kept in this plugin's own state file, so
+reaching for one never rewrites your `shell.json`.
+
 ## What it talks to
 
 One endpoint for the counts, read-only:
@@ -59,9 +124,13 @@ This plugin never posts to `/v1/events` — the endpoint the website uses to
 *record* a view, a copy or a heart. Reading your numbers here does not change
 them, for your plugins or anyone else's.
 
-Nothing else leaves the machine. The watchlist and the last numbers fetched are
-kept in `$XDG_STATE_HOME/omarchy/omapluginstats.json` so the panel opens with
-something to show before the next fetch returns.
+Nothing else leaves the machine. The watchlist, the ticker's three switches,
+and the last numbers fetched are kept in
+`$XDG_STATE_HOME/omarchy/omapluginstats.json` so the panel opens with something
+to show before the next fetch returns.
+
+The stats request repeats on a timer only while the ticker is on, and stops the
+moment it is switched off.
 
 ## Removing it
 

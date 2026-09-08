@@ -2,10 +2,10 @@
   "schemaVersion": 1,
   "id": "com.github.marvreichmann.omapluginstats",
   "name": "Omapluginstats",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": "Marvin Reichmann",
   "license": "MIT",
-  "description": "Views, views per day, copies and hearts for a watchlist of plugins on the Omarchy plugin marketplace.",
+  "description": "Views, views per day, copies and hearts for a watchlist of plugins on the Omarchy plugin marketplace, in a panel or as a split-flap ticker on the bar.",
   "homepage": "https://github.com/marvreichmann/omapluginstats",
   "kinds": [
     "service",
@@ -19,13 +19,103 @@
     "displayName": "Omapluginstats",
     "description": "Marketplace engagement for the plugins you watch.",
     "category": "Developer Tools",
-    "aliases": [
-      "plugin stats",
-      "marketplace",
-      "views",
-      "hearts"
-    ],
     "allowMultiple": false,
-    "defaultSection": "right"
+    "defaultSection": "right",
+    "defaults": {
+      "tickerQuietMotion": "roll",
+      "tickerNameChars": 14,
+      "tickerUppercase": true,
+      "tickerCards": true,
+      "tickerFlapMs": 26,
+      "refreshMinutes": 15
+    },
+    "schema": [
+      {
+        "key": "tickerQuietMotion",
+        "type": "enum",
+        "label": "Ticker motion without the flip",
+        "options": [
+          "roll",
+          "none"
+        ],
+        "defaultValue": "roll",
+        "description": "What the ticker does when \"Flip the cards\" is off in the panel: roll slides the line up and the next one in behind it, none simply changes it."
+      },
+      {
+        "key": "tickerFields",
+        "type": "multiselect",
+        "label": "Ticker columns",
+        "description": "Which numbers the ticker shows beside the name. Leave empty for all of them.",
+        "noSelectionText": "All columns",
+        "placeholderText": "Search columns...",
+        "emptyText": "No columns",
+        "options": [
+          {
+            "value": "views",
+            "label": "Views",
+            "description": "Listing views"
+          },
+          {
+            "value": "rate",
+            "label": "Views per day",
+            "description": "Lifetime average since the listing went up"
+          },
+          {
+            "value": "copies",
+            "label": "Copies",
+            "description": "Install command copied"
+          },
+          {
+            "value": "hearts",
+            "label": "Hearts",
+            "description": "Hearts"
+          }
+        ]
+      },
+      {
+        "key": "tickerNameChars",
+        "type": "integer",
+        "label": "Ticker name width",
+        "min": 4,
+        "max": 40,
+        "step": 1,
+        "defaultValue": 14,
+        "description": "How many characters of the plugin name the ticker shows before truncating it."
+      },
+      {
+        "key": "tickerUppercase",
+        "type": "boolean",
+        "label": "Uppercase ticker",
+        "defaultValue": true,
+        "description": "Show names in capitals, the way a departure board does. Off keeps them as written, at the cost of a longer drum and a slower settle."
+      },
+      {
+        "key": "tickerCards",
+        "type": "boolean",
+        "label": "Ticker cards",
+        "defaultValue": true,
+        "description": "Draw a card behind each character. Off leaves the seam and the motion on a flat bar."
+      },
+      {
+        "key": "tickerFlapMs",
+        "type": "integer",
+        "label": "Ticker flap speed (ms)",
+        "min": 8,
+        "max": 250,
+        "step": 1,
+        "defaultValue": 26,
+        "description": "Time for one card to turn. Lower is a faster, noisier board, and it also sets how quickly the board can change plugin at all."
+      },
+      {
+        "key": "refreshMinutes",
+        "type": "integer",
+        "label": "Ticker refresh (minutes)",
+        "min": 15,
+        "max": 360,
+        "step": 5,
+        "defaultValue": 15,
+        "description": "How often the numbers are fetched while the ticker is on. Fifteen minutes is both the default and the floor: one request returns every listing on the marketplace."
+      }
+    ]
   }
 }

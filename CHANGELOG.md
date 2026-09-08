@@ -6,6 +6,39 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-09-08
+
+### Added
+
+- **Bar ticker**, off by default and switched on from the panel: the watchlist
+  cycles across the bar itself as a split-flap departure board, one plugin at a
+  time, with its name and numbers flipping into place a card at a time.
+- Hovering the ticker holds the current plugin still so it can be read;
+  scrolling it steps through the watchlist by hand. Clicking still opens the
+  panel.
+- Numbers that have gone up since the last fetch are tinted for a minute, so a
+  change catches the eye instead of having to be spotted.
+- **Flip the cards** and **Time between plugins** in the panel, under the
+  ticker switch: whether each character turns over card by card, and how long a
+  plugin stays up before the next one. With the cards flipping, the slider will
+  not go below the time the board needs to settle, because a shorter setting
+  would change nothing.
+- With the flipping switched off the board still cycles — the line slides up
+  and the next one rises in behind it. `tickerQuietMotion` in `shell.json`
+  chooses `none` instead for a board that simply changes. The columns, name
+  width, capitals, cards and flap speed are configurable there too.
+- While the ticker is on — and only then — the counts are refreshed on a timer.
+  Fifteen minutes is both the default and the shortest allowed: one request
+  returns every listing on the marketplace.
+- A plugin shown by id rather than by name now has a long id shortened from the
+  left, so `com.github.you.yourplugin` reads as `YOURPLUGIN`.
+
+### Changed
+
+- Whether the ticker is on is kept in the plugin's own state file alongside the
+  watchlist, and adopted by every bar surface at once, so two monitors show the
+  same plugin at the same moment rather than two boards racing each other.
+
 ## [1.0.0] - 2026-09-06
 
 ### Added
@@ -25,5 +58,6 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Refresh on demand, and automatically when the panel is opened on numbers more
   than five minutes old.
 
-[Unreleased]: https://github.com/marvreichmann/omapluginstats/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/marvreichmann/omapluginstats/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/marvreichmann/omapluginstats/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/marvreichmann/omapluginstats/releases/tag/v1.0.0

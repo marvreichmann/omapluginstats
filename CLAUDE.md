@@ -5,9 +5,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What this is
 
 An Omarchy shell plugin (QML / Quickshell) that shows the marketplace's own
-engagement counts — views, copies, hearts — for a watchlist of plugin ids. There
-is no build step: the plugin is the four source files at the repository root
-plus `manifest.json`. `README.md` documents the user-facing behaviour and
+engagement counts — views, copies, hearts — for a watchlist of plugin ids, in a
+panel and optionally as a split-flap ticker on the bar itself. There is no build
+step: the plugin is the five source files at the repository root plus
+`manifest.json`. `README.md` documents the user-facing behaviour and
 `CHANGELOG.md` the release history. `tests/` holds unit tests for `Model.js` and
 is not installed (the install copies named files).
 
@@ -147,9 +148,41 @@ Two things about driving the panel from outside:
 The add field is the one path with no automated coverage: revealing it needs a
 real click on **Watch a plugin**. Check it by hand after touching `Panel.qml`.
 
+`Ticker.qml` can be driven on its own, which is the fastest way to look at a
+change to the board without waiting on a shell restart. It imports `qs.Commons`,
+so the harness directory needs that module reachable under the name the import
+uses:
+
+```sh
+mkdir -p /tmp/qstest/board && cd /tmp/qstest
+cp "$OLDPWD"/{Ticker.qml,Model.js} board/
+ln -sfn /usr/share/omarchy/shell/Commons board/Commons
+# shell.qml: a FloatingWindow with one Ticker per motion, fed by
+# Model.tickerModel(Model.rows(...)), and a Timer stepping `index`.
+qs -p board/shell.qml
+```
+
+Then capture it with `grim -g` in a loop, reading the window rectangle out of
+`hyprctl clients -j` (class `org.quickshell`). A burst of shots a few tens of
+milliseconds apart is the only way to see a mid-flip cell: a settled board looks
+exactly like static text, so a single screenshot proves nothing about the
+animation.
+
+To exercise the ticker under the real shell without clicking the panel toggle,
+write `"ticker": true` into the state file — the service watches it and adopts
+it on change, which is the same path a second instance would take. Back the file
+up first; it is the user's watchlist.
+
+Two things that will waste your time otherwise:
+
+- `pkill -f board/shell.qml` kills the shell running it, because that string is
+  in its own command line too. `pkill -x qs`.
+- The idle lock will come up in the middle of a long capture loop and every
+  frame after it is a screenshot of the lock screen.
+
 ## Architecture
 
-Four files, one direction of data flow:
+Five files, one direction of data flow:
 
 - **`Service.qml`** — the singleton (manifest kind `service`, one per shell
   session) that owns *all* state: the watchlist, the last fetched counts, the
@@ -165,6 +198,10 @@ Four files, one direction of data flow:
   slot, not the panel.
 - **`Panel.qml`** — rendering and input only; every edit is forwarded to the
   service.
+- **`Ticker.qml`** — the optional bar board: drawing and timing, nothing else.
+  What it says, how wide each column is, which cards a cell turns through and
+  how long the board takes to settle all come from `Model.js`, which is what
+  makes an animation this fiddly checkable without a running shell.
 
 ### Invariants that break things when violated
 
@@ -200,6 +237,49 @@ Four files, one direction of data flow:
   this is what makes a write harmless in the moment they are not. Removing
   several rows in a row still works, because each removal names its own id and
   merges the rest.
+- **The ticker is the only thing that polls, and only while it is on.** The
+  original argument against numbers on the bar was that a count moving a few
+  times a day earns no permanent space there, and that putting one up would mean
+  polling all session for a figure nobody is looking at. Ticker mode inverts the
+  second half — a board already on screen is where a number moving is worth
+  watching — so the poll exists, gated on `Service.ticker`, and
+  `Model.tickerPollMs` floors it at fifteen minutes. That floor is the
+  marketplace's, not the user's: one request is 160 KB of every listing. A
+  setting can make it politer and not ruder.
+- **A ticker column's cell count is fixed across every frame.**
+  `Model.tickerModel` measures each column over the whole watchlist, not per
+  frame. A column that resized as the board cycled would drag every column right
+  of it sideways on each flip, and a bar widget that reflows itself every four
+  seconds moves every other widget with it.
+- **The QML binds through the ticker model to scalars, never to its objects.** A
+  fetch rebuilds `Model.tickerModel`'s return value wholesale. A `Repeater` bound
+  to the fresh array rebuilds its delegates, so every cell would reset to blank
+  and re-flap the identical text on every refresh, forever. The cell repeater is
+  bound to `widths[key]` as an int and each cell to `texts[key].charAt(i)` as a
+  string, both of which compare equal and change nothing.
+- **A cell decides its own path.** It is told where to be and asks
+  `Model.flapPath` for the cards between here and there. Nothing staggers the
+  columns deliberately — the uneven settle is the distance each cell has to
+  travel, which is what a real board does and why it looks like one.
+- **The ticker's switches live in the state file; its appearance lives in
+  `shell.json`.** Three things are switches — on/off, flip the cards, time
+  between plugins — and all three are in the panel and persisted beside the
+  watchlist. The state file is ours to write and a panel control is a user
+  action; `shell.json` is the user's, and a control that rewrote it would
+  reformat their file to persist a click. Nothing is settable from both places:
+  `tickerQuietMotion` chooses *which quiet motion* the flip switch falls back
+  to, never whether it flips.
+- **The service resolves the ticker's configuration, not the widget.** Half of
+  it arrives from the state file and half from `shell.json` via
+  `BarWidget.applyTickerSettings()`, and only the owner of both can put them
+  together once for every monitor — so `tickerMotion`, `tickerCycleMs` and
+  `tickerDwellFloorMs` are read-only bindings on the service and the widget
+  reads them back.
+- **The dwell slider starts at `Model.tickerDwellFloorMs`, not at the clamp.**
+  With the cards flipping, `tickerCycleMs` raises any dwell below the settle
+  time, so a slider spanning the full clamp would have a dead left third. The
+  floor moves when the flipping is switched off, and the panel prints the
+  effective cycle rather than the requested one.
 - Views per day is a **lifetime average**, and the panel must not imply
   otherwise. It is the only rate the marketplace's data supports (see above);
   `rated` is false — a dash, not a zero — when there is no listing date, because
@@ -211,6 +291,38 @@ Worth knowing, because guessing at them is how the first version broke:
 
 - The **shell registers plugin bar widgets itself**, from `manifest.json`, under
   the plugin id. A plugin must not call `barWidgetRegistry.register`.
+- **`manifest.barWidget.schema` is what a settings UI renders**, alongside
+  `defaults`; `shell.qml` passes both through to `barWidgetRegistry` without
+  validating either, and `Bar.qml` never applies `defaults` — a widget reads its
+  settings through `setting(name, fallback)` and owns its own fallbacks.
+
+  Nothing in `omacom/omarchy` *consumes* a schema: the renderer lives outside
+  that repo, and `settingsForm: "spacerSettings"` names a form that does not
+  exist there either. So the field vocabulary can only be read off the
+  first-party manifests that declare one, which is where these came from:
+
+  | Type | Extra keys | Declared by |
+  |---|---|---|
+  | `integer` | `min`, `max`, `step` | agents, dropbox, tailscale |
+  | `enum` | `options` (plain strings) | agents |
+  | `path` | — | agents |
+  | `string` | — | agents |
+  | `boolean` | — | indicators |
+  | `multiselect` | `options` (`{value,label,description}`), `noSelectionText`, `placeholderText`, `emptyText` | indicators |
+
+  `number` is **not** in that vocabulary — an earlier version of this manifest
+  guessed it. Every field also carries `defaultValue`, and `barWidget.defaults`
+  mirrors those, which is what dropbox and agents do.
+
+  A range declared here is a promise a settings UI will keep and `Model.js` will
+  not: the UI offers `min`..`max`, and the clamp that actually runs is
+  `Model.clampInt`. Nothing reconciles them at run time, so
+  `tests/model.test.js` asserts the manifest's ranges against the Model
+  constants. Change one and the test names the other.
+
+  Note also that `barWidget.category` is the *widget picker's* category and has
+  nothing to do with the marketplace submission category — dropbox uses "Files",
+  which is not one of the categories the issue form offers.
 - The bar injects only `bar`, `moduleName` and `settings` into a widget. There is
   no `shell` and no `service`. A nested panel gets nothing at all unless the
   widget hands it over (see `BarWidget.injectPanel`).
@@ -268,13 +380,47 @@ can honestly be ticked:
 - **License and external dependencies documented.** `curl`, `grep` and a POSIX
   `sh` — the pipeline in `listingsProc` is the only reason the last two are
   there, so if that ever becomes a QML-side parse, the README changes with it.
-- **You own the preview assets.** `preview.png` is the panel and nothing else,
-  composited onto a flat backdrop. Do not ship a desktop screenshot: the earlier
-  ones had a browser behind the panel, which is both somebody else's content and
-  a look at the author's screen. Rebuild it by cropping the panel out of a
-  `grim` capture (its accent border makes the rectangle easy to find by scanning
-  a row and a column for accent-coloured pixels) and compositing:
-  `magick -size 1200x760 xc:'#0b0b0b' panel.png -gravity center -composite`.
+- **You own the preview assets.** `preview.png` is the ticker board above the
+  panel, both cropped to their own pixels and composited onto a flat backdrop.
+  Do not ship a desktop screenshot: the earliest ones had a browser behind the
+  panel, which is both somebody else's content and a look at the author's
+  screen. Nothing but this plugin's own two surfaces goes in — in particular,
+  crop the board to the widget alone rather than taking a slice of the bar,
+  which would carry the neighbouring widgets with it.
+
+  Rebuilding it, in order:
+
+  1. Stage a watchlist worth looking at. The five in the current image are
+     `io.github.mtolhuys.theme-manager`, `io.github.woogy7.vitals`,
+     `3lymn.plugin-drawer`, `alvarosaavedra.market-stats` and
+     `com.github.marvreichmann.omavibrance` — keep them for continuity. Write
+     them into the state file with `ticker: true`, `stats: {}` and
+     `fetchedAt: 0`, restart the shell, then open the panel once: the empty
+     stats and zero timestamp are what make it fetch real numbers and listing
+     dates for ids that were never added through `add()`.
+  2. Capture the board with the panel **closed** — an open panel puts the bar's
+     active-widget underline through the strip. Find the widget's rectangle by
+     looking for the cards: they are a faint wash of the foreground over the bar
+     background, so a column inside one is measurably lighter than the bar. The
+     icon starts `Style.bar.iconCanvas + Style.spacing.md` left of the first
+     card, and `WidgetButton` pads `Style.spacing.rowPaddingX / 2` beyond that.
+  3. **Use a settled frame.** A mid-flip board photographs beautifully, but the
+     cells caught turning show values that are not the plugin's counts, and a
+     marketplace listing image is read as a statement of fact. The cards and
+     their seams already say "split-flap" at rest. To find one, burst-capture
+     and diff consecutive frames: a run of zero-difference frames is a settled
+     board.
+  4. Crop the panel out of a `grim` capture by its accent border — scan for rows
+     and columns holding a long run of accent-coloured pixels, and take the
+     outermost. The bar widget's underline is a shorter run and has to be
+     rejected on length.
+  5. Composite both on the backdrop, board above panel, which is where they are
+     on screen:
+     `magick -size 1200x988 xc:'#0b0b0b' board.png -geometry +391+60 -composite panel.png -geometry +302+135 -composite preview.png`
+
+  Restore the state file afterwards, and reset the ticker keys rather than
+  leaving the staged ones behind — the watchlist is the user's, and so is
+  whether their bar has a board on it.
 - **Does not overwrite user configuration without consent.** It writes one file,
   `$XDG_STATE_HOME/omarchy/omapluginstats.json`, and nothing else. Keep it that
   way; `shell.json` in particular is the user's, not ours.
