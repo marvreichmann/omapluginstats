@@ -95,9 +95,40 @@ host realm and returns its top-level declarations, so a new pure function is
 testable without an export list — and without the cross-realm prototypes that
 make every `deepEqual` fail while printing two identical-looking values.
 
+One test reads `manifest.json` rather than `Model.js`: the settings schema
+declares a range for a settings UI to offer and `Model.js` clamps what actually
+arrives, nothing reconciles the two at run time, so the test asserts them
+against each other. A scratch copy of the suite therefore needs the manifest
+alongside it.
+
 This is why `Model.js` exists: response parsing, watchlist edits and row
 assembly become checkable in milliseconds instead of by restarting the shell.
 Prefer extracting to it over testing through QML.
+
+**`--experimental-test-coverage` lies about this suite.** It reports 100% across
+the board because it measures `tests/model.js`, the loader; `Model.js` goes
+through `vm.runInThisContext`, so V8 never attributes it to a file and it is
+absent from the report entirely. To measure it, rebuild it as a real CommonJS
+module in a scratch directory:
+
+```sh
+S=$(mktemp -d); mkdir -p "$S/tests"
+sed '/^\s*\.pragma\s\+library\s*$/d' Model.js > "$S/Model.js"
+grep -oE '^(function|var) [A-Za-z_$][A-Za-z0-9_$]*' Model.js | awk '{print $2}' \
+  | paste -sd, - | sed 's/^/module.exports = { /; s/$/ }/' >> "$S/Model.js"
+cp tests/model.test.js "$S/tests/"
+cp manifest.json "$S/"
+sed -i 's|require("./model.js")|require("../Model.js")|' "$S/tests/model.test.js"
+(cd "$S" && node --test --experimental-test-coverage tests/)
+```
+
+At `7b5675b` that is 100% of lines and functions and 92.18% of branches. Add
+`--test-reporter=lcov --test-reporter-destination=cov.info` to find out *which*
+branches: the `BRDA:` records with a zero or `-` hit count name the lines. Every
+one is a null/undefined/type guard on what QML hands in — `FileView` text, a
+hand-edited state file, a `drum` argument that could be absent — plus the
+singular arms of two plural strings. Not worth chasing; do not let a coverage
+number talk you into deleting a guard.
 
 ## Test loop
 
@@ -145,8 +176,24 @@ Two things about driving the panel from outside:
   `hyprctl dispatch 'hl.dsp.cursor.move({x = 3320, y = 160})'`. The old
   `hyprctl dispatch movecursor 3320 160` form is a syntax error.
 
-The add field is the one path with no automated coverage: revealing it needs a
-real click on **Watch a plugin**. Check it by hand after touching `Panel.qml`.
+**Four controls in the panel can only be reached with a mouse**, and nothing on
+this machine can synthesise a click: there is no `ydotool`, `wtype` is
+keyboard-only, and Hyprland has no click dispatcher. Keyboard is not a way
+around it either — `PanelKeyCatcher` takes keys with
+`Keys.priority: Keys.BeforeItem` and accepts Tab and Space itself, so focus
+never reaches a control inside the panel. After touching `Panel.qml`, check by
+hand: **Watch a plugin** (reveal the field, add an id, remove the row), **Bar
+ticker**, **Flip the cards**, and dragging **Time between plugins**.
+
+What stands in for that everywhere else, so the hand-check stays this short:
+
+- Every service function a panel handler calls can be driven through a
+  standalone `Service.qml` harness — see the bottom of this section. That is the
+  call-time half, and the half that fails silently.
+- A signal handler *name* is checked when the QML loads: a wrong `onXxx` is a
+  load-time error, not a silent one. So if the plugin loads clean, the handlers
+  are attached to signals that exist, and only the mouse plumbing inside
+  `qs.Ui` is unproven.
 
 `Ticker.qml` can be driven on its own, which is the fastest way to look at a
 change to the board without waiting on a shell restart. It imports `qs.Commons`,
