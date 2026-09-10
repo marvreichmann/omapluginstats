@@ -76,6 +76,53 @@ function isEmptyMap(map) {
   return true
 }
 
+// ----------------------------------------------------------------- fetching
+//
+// Both remote documents reach the QML engine through a StdioCollector, which
+// keeps everything a process writes, and curl's --max-time bounds how long a
+// fetch runs but not how much it sends. So every fetch goes through
+// fetchScript, which holds a hard ceiling on the bytes it downloads and on the
+// bytes it hands over, and fails closed — exit 63, nothing on stdout — the
+// moment either is crossed. Nothing is ever read in part.
+//
+// The ceilings sit several times above what each document weighs today, so the
+// marketplace can grow into them. The catalog one applies after decompression:
+// --compressed turns ~830 KB on the wire into 6.3 MB, and it is the unpacked
+// size that would otherwise have no limit.
+var statsMaxBytes = 1024 * 1024        // /v1/stats is ~160 KB
+var catalogMaxBytes = 16 * 1024 * 1024 // catalog.json is ~6.3 MB unpacked
+var listingLinesMaxBytes = 1024 * 1024 // grep's share of it is ~215 KB
+
+// Run as
+//   sh -c fetchScript sh <max download> <max output> <grep pattern or ""> <curl args…>
+// Every value arrives as a positional argument, so nothing — least of all a
+// URL — is ever interpolated into the script text.
+//
+// The download is capped with head before anything else reads it, grep
+// included: grep holds a whole line in memory, and a response with no newline
+// in it is one line. The pipeline writes to a private temporary directory
+// rather than to stdout so its size can be checked before a single byte is
+// passed on. POSIX sh has no pipefail, so curl's own status comes back on fd 3.
+// 63 is curl's code for "maximum file size exceeded", reused for both ceilings
+// so that curl's --max-filesize refusal and ours read the same.
+var fetchScript = [
+  'download=$1 output=$2 pattern=$3',
+  'shift 3',
+  'dir=$(mktemp -d) || exit 1',
+  'trap \'rm -rf "$dir"\' EXIT',
+  'trap \'exit 1\' HUP INT TERM',
+  'rc=$( { { curl --max-filesize "$download" "$@"; echo "$?" >&3; } | head -c "$((download + 1))" > "$dir/body"; } 3>&1 )',
+  '[ "$(wc -c < "$dir/body")" -le "$download" ] || exit 63',
+  '[ "$rc" = 0 ] || exit "${rc:-1}"',
+  'if [ -n "$pattern" ]; then',
+  '  grep -E -- "$pattern" "$dir/body" | head -c "$((output + 1))" > "$dir/out"',
+  'else',
+  '  mv "$dir/body" "$dir/out"',
+  'fi',
+  '[ "$(wc -c < "$dir/out")" -le "$output" ] || exit 63',
+  'cat "$dir/out"'
+].join("\n")
+
 // -------------------------------------------------------------------- stats
 
 // An id-to-counts map, keeping only the entries that are shaped like one.
@@ -101,9 +148,14 @@ function normalizeStats(source) {
 
 // The API answers with { schemaVersion, plugins: { id: { views, copies, hearts } } }.
 function parseStats(text) {
+  var body = String(text === undefined || text === null ? "" : text)
+  // fetchScript never delivers more than this; refusing it here as well keeps
+  // the parser bounded even for a caller that bypasses the script. A string's
+  // length never exceeds the UTF-8 byte count it was decoded from.
+  if (body.length > statsMaxBytes) return null
   var payload = null
   try {
-    payload = JSON.parse(String(text === undefined || text === null ? "" : text))
+    payload = JSON.parse(body)
   } catch (e) {
     return null
   }
@@ -218,9 +270,14 @@ function displayName(names, id) {
 // id last appeared. Verified against a full parse of all 2538 listings — 2502
 // dates, no mismatches. The 36 without one are the first-party `omarchy.*`
 // plugins, which are not community listings and have no listing date at all.
+//
+// Like parseStats, it refuses more than fetchScript would deliver, and answers
+// an empty map — which the service reads as "no answer", not "no dates".
 function parseListingDates(text) {
   var out = {}
-  var lines = String(text === undefined || text === null ? "" : text).split("\n")
+  var body = String(text === undefined || text === null ? "" : text)
+  if (body.length > listingLinesMaxBytes) return out
+  var lines = body.split("\n")
   var current = null
   for (var i = 0; i < lines.length; i++) {
     var match = /^\s*"(id|listedAt)":\s*"([^"]*)"/.exec(lines[i])
@@ -422,6 +479,9 @@ function fetchError(exitCode) {
   case 28: return "The marketplace API timed out"
   case 35:
   case 60: return "TLS handshake with the marketplace API failed"
+  // curl's --max-filesize or fetchScript's own ceiling: either way, nothing
+  // was read.
+  case 63: return "The marketplace API sent more than the plugin will read"
   default: return "Could not fetch stats (curl exit " + exitCode + ")"
   }
 }

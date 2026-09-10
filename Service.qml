@@ -244,10 +244,13 @@ Item {
 
   Process {
     id: statsProc
-    // -f so an HTTP error is an exit code rather than an error page parsed as
-    // statistics; -sS keeps the progress meter out of stdout while leaving real
-    // failures on stderr.
-    command: ["curl", "-fsS", "--max-time", "10", "-H", "Accept: application/json", root.statsUrl]
+    // Through Model.fetchScript, which caps the response at statsMaxBytes and
+    // hands over nothing at all if it runs past that. -f so an HTTP error is an
+    // exit code rather than an error page parsed as statistics; -sS keeps the
+    // progress meter out of stdout while leaving real failures on stderr.
+    command: ["sh", "-c", Model.fetchScript, "sh",
+      String(Model.statsMaxBytes), String(Model.statsMaxBytes), "",
+      "-fsS", "--max-time", "10", "-H", "Accept: application/json", root.statsUrl]
 
     stdout: StdioCollector {
       waitForEnd: true
@@ -291,12 +294,16 @@ Item {
     // QML engine: ~215 KB of "id"/"listedAt" lines instead. --compressed keeps
     // the transfer around 830 KB.
     //
-    // This is the one command here that goes through a shell, because it is a
-    // pipeline. The string is a constant — no watched id, and nothing else the
-    // user can type, is interpolated into it.
-    command: ["sh", "-c",
-      "curl -fsS --compressed --max-time 20 " + root.catalogUrl
-        + " | grep -E '^[[:space:]]*\"(id|listedAt)\": '"]
+    // Model.fetchScript caps the unpacked download at catalogMaxBytes before
+    // grep sees it, and grep's output at listingLinesMaxBytes; past either, it
+    // hands over nothing, which consumeListings treats as no answer. The script
+    // is a constant — the URL, the pattern and the limits are positional
+    // arguments, and no watched id or anything else the user can type is among
+    // them.
+    command: ["sh", "-c", Model.fetchScript, "sh",
+      String(Model.catalogMaxBytes), String(Model.listingLinesMaxBytes),
+      "^[[:space:]]*\"(id|listedAt)\": ",
+      "-fsS", "--compressed", "--max-time", "20", root.catalogUrl]
 
     stdout: StdioCollector {
       waitForEnd: true

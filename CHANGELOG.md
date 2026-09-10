@@ -6,6 +6,16 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.1.1] - 2026-09-10
+
+### Security
+
+- Both downloads now have a hard size limit: 1 MB for the stats, 16 MB for the
+  catalog after decompression, and 1 MB for the lines kept from it. A response
+  that runs past its limit is discarded whole, before any of it reaches the
+  Omarchy shell, and the panel says so instead of showing part of it. Previously only
+  the time a fetch could take was limited, not how much it could send.
+
 ## [1.1.0] - 2026-09-08
 
 ### Added
@@ -58,6 +68,7 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Refresh on demand, and automatically when the panel is opened on numbers more
   than five minutes old.
 
-[Unreleased]: https://github.com/marvreichmann/omapluginstats/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/marvreichmann/omapluginstats/compare/v1.1.1...HEAD
+[1.1.1]: https://github.com/marvreichmann/omapluginstats/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/marvreichmann/omapluginstats/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/marvreichmann/omapluginstats/releases/tag/v1.0.0

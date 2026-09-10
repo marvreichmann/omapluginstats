@@ -152,9 +152,13 @@ services are installed, and nothing is left running.
 ## Requirements
 
 - Omarchy 4.x with the Quickshell bar
-- `curl`, `grep` and a POSIX `sh` on `PATH` — all part of a base Arch install.
-  `curl` fetches the two documents above; `grep` narrows the catalog before it
-  is parsed, and `sh` is used only to connect those two with a pipe.
+- `curl`, `grep`, a POSIX `sh` and coreutils (`head`, `wc`, `mktemp`) on
+  `PATH` — all part of a base Arch install. `curl` fetches the two documents
+  above; `grep` narrows the catalog before it is parsed. `sh` and coreutils run
+  a small wrapper around each fetch that enforces a hard size limit — 1 MB for
+  the stats, 16 MB for the unpacked catalog — and discards the response
+  entirely if it runs past it, so a misbehaving server cannot make the shell
+  hold an unbounded amount of data.
 
 No other external dependencies, and no accounts, keys or tokens: both sources
 are public and read anonymously.

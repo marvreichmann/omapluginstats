@@ -41,6 +41,14 @@ test("parseStats returns null for anything unreadable", () => {
   assert.deepEqual(Model.parseStats(JSON.stringify({ plugins: {} })), {})
 })
 
+test("parseStats refuses a body over the fetch ceiling, however valid", () => {
+  // Trailing whitespace keeps it valid JSON, so the null can only come from the
+  // size check.
+  const padded = RESPONSE + " ".repeat(Model.statsMaxBytes)
+  assert.equal(Model.parseStats(padded), null)
+  assert.notEqual(Model.parseStats(padded.slice(0, Model.statsMaxBytes)), null)
+})
+
 test("parseStats drops entries it cannot trust", () => {
   const stats = Model.parseStats(JSON.stringify({
     plugins: {
@@ -235,6 +243,14 @@ test("parseListingDates pairs each date with the id above it", () => {
   assert.deepEqual(Model.parseListingDates(""), {})
 })
 
+test("parseListingDates answers nothing for input over the fetch ceiling", () => {
+  // Empty, not partial: the service reads an empty map as no answer and keeps
+  // the retry window open.
+  const padded = CATALOG_LINES + "\n".repeat(Model.listingLinesMaxBytes)
+  assert.deepEqual(Model.parseListingDates(padded), {})
+  assert.equal(Object.keys(Model.parseListingDates(padded.slice(0, Model.listingLinesMaxBytes))).length, 2)
+})
+
 test("listingDays counts inclusively and refuses to divide by zero", () => {
   const listed = "2026-09-01T00:00:00.000Z"
   assert.equal(Model.listingDays(Date.parse("2026-09-01T09:00:00Z"), listed), 1)
@@ -307,7 +323,8 @@ test("fetchError turns curl's exit code into something actionable", () => {
     22: "The marketplace API refused the request",
     28: "The marketplace API timed out",
     35: "TLS handshake with the marketplace API failed",
-    60: "TLS handshake with the marketplace API failed"
+    60: "TLS handshake with the marketplace API failed",
+    63: "The marketplace API sent more than the plugin will read"
   }
   for (const code of Object.keys(messages)) {
     assert.equal(Model.fetchError(Number(code)), messages[code], "curl exit " + code)
