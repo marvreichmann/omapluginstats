@@ -6,7 +6,7 @@
 //
 //   node --test tests/
 //
-// The QML files are still exercised by hand — see CLAUDE.md's test loop.
+// The QML files are still exercised by hand, in an installed copy of the plugin.
 
 const test = require("node:test")
 const assert = require("node:assert/strict")
