@@ -123,6 +123,97 @@ var fetchScript = [
   'cat "$dir/out"'
 ].join("\n")
 
+// -------------------------------------------------------------- local files
+//
+// The two kinds of file this plugin reads — its own state file and each watched
+// plugin's manifest.json — live in directories other plugins can write to, so
+// neither is read by FileView, which would follow a symlink and load a file of
+// any size. readScript opens the file once and then checks what it opened: a
+// regular file, owned by the user, with exactly one link, still the file the
+// path names, and no larger than the ceiling. That identity check is what makes
+// the open safe to do first — a symlink, or a file swapped in after the checks
+// above it, has a path inode that no longer matches the open descriptor's. Only
+// then is it read, at most one byte past the ceiling, and handed on.
+//
+// The first line of output says what happened, so the caller can tell a first
+// run (no file yet: write one) from a file it must leave alone (refused or
+// oversize: do not read it, and do not overwrite it either). Empty output — a
+// shell that died, a timeout — reads as "failed", which is treated the same.
+// The state ceiling also bounds writeScript's argument, which Linux caps at
+// 128 KB for a single argv string.
+var stateMaxBytes = 96 * 1024    // a full 64-plugin watchlist is ~20 KB
+var manifestMaxBytes = 64 * 1024 // a manifest is a few KB
+
+// Run as  sh -c readScript sh <max bytes> <file>
+// The file's own directory must not be a symlink either: a manifest's directory
+// is named after the plugin id, and another plugin can create one.
+var readScript = [
+  'export LC_ALL=C',
+  'max=$1 file=$2',
+  'refuse() { echo refused; exit 1; }',
+  'oversize() { echo oversize; exit 63; }',
+  '[ -L "$(dirname -- "$file")" ] && refuse',
+  'if [ ! -e "$file" ] && [ ! -L "$file" ]; then echo absent; exit 0; fi',
+  '[ -f "$file" ] && [ ! -L "$file" ] && [ -r "$file" ] || refuse',
+  'exec 3< "$file" || refuse',
+  'fd=/proc/$$/fd/3',
+  '[ "$(stat -L -c %F "$fd")" = "regular file" ] || refuse',
+  '[ "$(stat -L -c %d:%i:%u:%h "$fd")" = "$(stat -c %d:%i "$file"):$(id -u):1" ] || refuse',
+  '[ "$(stat -L -c %s "$fd")" -le "$max" ] || oversize',
+  // The size above can change after it is read; this bound cannot. The x keeps
+  // command substitution from eating trailing newlines.
+  'body=$(head -c "$((max + 1))" <&3; printf x) || refuse',
+  'body=${body%x}',
+  '[ "${#body}" -le "$max" ] || oversize',
+  'printf "ok\\n%s" "$body"'
+].join("\n")
+
+// Run as  sh -c writeScript sh <max bytes> <file> <text>
+// FileView's writes follow a symlink — checked, not assumed: an atomic write to
+// a link overwrote the file it pointed at — so a link planted at the state path
+// would turn every flush into an overwrite of some other file. This writes a
+// private temporary file beside the target and renames it into place: a rename
+// replaces whatever is at the path, a link included, and never writes through
+// it. -T makes a directory planted at the path a failure, not a destination.
+var writeScript = [
+  'export LC_ALL=C',
+  'max=$1 file=$2 text=$3',
+  '[ "${#text}" -le "$max" ] || exit 63',
+  'dir=$(dirname -- "$file")',
+  'mkdir -p -- "$dir" || exit 1',
+  '[ -L "$dir" ] && exit 1',
+  'tmp=$(mktemp -- "$dir/.omapluginstats.XXXXXX") || exit 1',
+  'if printf "%s" "$text" > "$tmp" && mv -fT -- "$tmp" "$file"; then exit 0; fi',
+  'rm -f -- "$tmp"',
+  'exit 1'
+].join("\n")
+
+// Splits readScript's output into { status, body }. The body is only ever
+// non-empty for "ok", and is bounded again here, whatever produced the text.
+function readResult(text, maxBytes) {
+  var s = String(text === undefined || text === null ? "" : text)
+  var newline = s.indexOf("\n")
+  var status = newline < 0 ? s : s.slice(0, newline)
+  if (status === "ok") {
+    var body = s.slice(newline + 1)
+    return body.length <= maxBytes ? { status: "ok", body: body } : { status: "oversize", body: "" }
+  }
+  if (status === "absent" || status === "refused" || status === "oversize") return { status: status, body: "" }
+  return { status: "failed", body: "" }
+}
+
+// Why the state file was not loaded. Saying so matters: while it stands, the
+// plugin does not write the file, so nothing the user changes is kept.
+function stateReadError(status) {
+  switch (status) {
+  case "ok":
+  case "absent": return ""
+  case "oversize": return "State file is too large to read; changes are not being saved"
+  case "refused": return "State file is not a regular file you own; changes are not being saved"
+  default: return "Could not read the state file; changes are not being saved"
+  }
+}
+
 // -------------------------------------------------------------------- stats
 
 // An id-to-counts map, keeping only the entries that are shaped like one.
@@ -239,8 +330,12 @@ function watchlistToWrite(current, onDisk, removedId) {
 // installed has its name sitting in its own manifest, which is where the panel
 // gets one; anything else is shown by id.
 function manifestName(text) {
+  var body = String(text === undefined || text === null ? "" : text)
+  // readScript never delivers more than this; refused here as well so the
+  // parser stays bounded whatever hands it text.
+  if (body.length > manifestMaxBytes) return ""
   try {
-    var parsed = JSON.parse(String(text === undefined || text === null ? "" : text))
+    var parsed = JSON.parse(body)
     var name = parsed ? parsed.name : null
     return typeof name === "string" ? name.replace(/^\s+|\s+$/g, "") : ""
   } catch (e) {

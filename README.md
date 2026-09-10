@@ -152,13 +152,20 @@ services are installed, and nothing is left running.
 ## Requirements
 
 - Omarchy 4.x with the Quickshell bar
-- `curl`, `grep`, a POSIX `sh` and coreutils (`head`, `wc`, `mktemp`) on
-  `PATH` — all part of a base Arch install. `curl` fetches the two documents
-  above; `grep` narrows the catalog before it is parsed. `sh` and coreutils run
-  a small wrapper around each fetch that enforces a hard size limit — 1 MB for
-  the stats, 16 MB for the unpacked catalog — and discards the response
-  entirely if it runs past it, so a misbehaving server cannot make the shell
-  hold an unbounded amount of data.
+- `curl`, `grep`, a POSIX `sh` and coreutils (`head`, `wc`, `mktemp`, `stat`,
+  `mv`, `timeout`) on `PATH` — all part of a base Arch install. `curl` fetches
+  the two documents above; `grep` narrows the catalog before it is parsed. `sh`
+  and coreutils run a small wrapper around each fetch that enforces a hard size
+  limit — 1 MB for the stats, 16 MB for the unpacked catalog — and discards the
+  response entirely if it runs past it, so a misbehaving server cannot make the
+  shell hold an unbounded amount of data.
+- Local files go through the same kind of wrapper. The state file and the
+  watched plugins' `manifest.json` files are read only if they are regular
+  files you own, not symlinks or hard links, and no larger than 96 KB and
+  64 KB. The state file is written by renaming a fresh file into place, so a
+  symlink at its path is replaced rather than written through. A state file
+  that fails those checks is neither read nor overwritten, and the panel says
+  that changes are not being saved.
 
 No other external dependencies, and no accounts, keys or tokens: both sources
 are public and read anonymously.

@@ -238,7 +238,9 @@ Item {
     stats = parsed
     fetchedAt = Date.now()
     sessionFetchedAt = fetchedAt
-    lastError = ""
+    // A good fetch clears a fetch error, not a refused state file: while that
+    // stands nothing is being saved, and the user needs to keep seeing it.
+    lastError = stateError
     saveTimer.restart()
   }
 
@@ -313,10 +315,13 @@ Item {
 
   // ------------------------------------------------------------------ names
 
-  // One reader per watched plugin. A FileView is not an Item, so it needs an
-  // Item delegate to live in; the container is invisible and has no size, and
-  // an id that is not installed simply fails to load and keeps its id as its
-  // label.
+  // One checked read per watched plugin, through Model.readScript. A manifest
+  // sits in a directory another plugin can write to, so it is never opened by
+  // FileView, which would follow a symlink and load a file of any size. A
+  // Process is not an Item, so each lives in an Item delegate; the container is
+  // invisible and has no size. An id that is not installed — or whose manifest
+  // is refused — keeps its id as its label. `timeout` is only a backstop: the
+  // script refuses anything that could block before it opens it.
   Item {
     id: nameReaders
     visible: false
@@ -328,12 +333,18 @@ Item {
         id: reader
         required property string modelData
 
-        FileView {
-          path: root.pluginsDir + "/" + reader.modelData + "/manifest.json"
-          watchChanges: false
-          printErrors: false
-          onLoaded: root.setName(reader.modelData, Model.manifestName(text()))
-          onLoadFailed: root.setName(reader.modelData, "")
+        Process {
+          running: true
+          command: ["timeout", "5", "sh", "-c", Model.readScript, "sh",
+            String(Model.manifestMaxBytes), root.pluginsDir + "/" + reader.modelData + "/manifest.json"]
+
+          stdout: StdioCollector {
+            waitForEnd: true
+            onStreamFinished: {
+              var result = Model.readResult(text, Model.manifestMaxBytes)
+              root.setName(reader.modelData, result.status === "ok" ? Model.manifestName(result.body) : "")
+            }
+          }
         }
       }
     }
@@ -341,13 +352,76 @@ Item {
 
   // ------------------------------------------------------------ persistence
 
+  // The state file lives in a directory other plugins can write to, so it is
+  // read and written only through Model.readScript and Model.writeScript —
+  // never by FileView, which follows a symlink both ways and reads a file of
+  // any size. False until a read has come back "ok" or "absent", and false
+  // again the moment one comes back refused: a file we will not read is a file
+  // we must not overwrite either.
   property bool stateLoaded: false
+  property string stateError: ""
+
+  function applyStateRead(text) {
+    var result = Model.readResult(text, Model.stateMaxBytes)
+    var error = Model.stateReadError(result.status)
+    if (error) {
+      stateLoaded = false
+      if (lastError === "" || lastError === stateError) lastError = error
+      stateError = error
+      return
+    }
+    if (stateError) {
+      if (lastError === stateError) lastError = ""
+      // The watcher may be following whatever a refused symlink pointed at
+      // (see stateRetryTimer); point it at the file now at the path.
+      stateWatcher.watchChanges = false
+      stateWatcher.watchChanges = true
+    }
+    stateError = ""
+    // Absent is a first run: an empty watchlist is the right starting point,
+    // and the first write creates the file.
+    loadState(result.status === "ok" ? result.body : "")
+  }
+
+  // Requests coalesce: a change that lands while a read is running is picked
+  // up by one more read after it, however many changes there were.
+  property bool stateReadWanted: false
+
+  function readState() {
+    stateReadWanted = true
+    startStateRead()
+  }
+
+  function startStateRead() {
+    if (stateReader.running || !stateReadWanted) return
+    stateReadWanted = false
+    stateReader.running = true
+  }
+
+  // Likewise for writes, except that only the newest text is worth writing.
+  property string pendingWrite: ""
+
+  function writeState(text) {
+    pendingWrite = text
+    startStateWrite()
+  }
+
+  function startStateWrite() {
+    if (stateWriter.running || pendingWrite === "") return
+    stateWriter.command = ["sh", "-c", Model.writeScript, "sh",
+      String(Model.stateMaxBytes), root.statePath, pendingWrite]
+    pendingWrite = ""
+    stateWriter.running = true
+  }
 
   // The watchlist as the file last said it was. Writes are merged against this
   // so that nothing but a removal can shorten what is stored.
   property var diskWatchlist: []
 
   function loadState(text) {
+    // Bounded by readScript and readResult already; checked again so this
+    // parser is never handed more than the ceiling, whatever calls it.
+    if (String(text).length > Model.stateMaxBytes) return
     try {
       var parsed = JSON.parse(text)
       if (parsed) {
@@ -395,7 +469,7 @@ Item {
     if (!stateLoaded) return
     var stored = Model.watchlistToWrite(root.watchlist, root.diskWatchlist, removedId)
     root.diskWatchlist = stored
-    stateFile.setText(JSON.stringify({
+    writeState(JSON.stringify({
       version: 1,
       watchlist: stored,
       // Only the watched plugins. The rest of the response is 160 KB of other
@@ -415,20 +489,61 @@ Item {
   // rebuilds the service under a running shell — and without this the instance
   // that started first keeps an empty watchlist and destroys the real one with
   // its next flush. Adopting the file instead makes the last writer win.
+  //
+  // This FileView only watches. With preload off and every read and write
+  // blocked it never opens the file — checked, not assumed: its access time
+  // stays put and an unreadable file draws no read attempt — while its change
+  // signal still fires for both an in-place write and a rename over the path.
+  // Never call text() on it: that is a read, and it bypasses every check.
   FileView {
-    id: stateFile
+    id: stateWatcher
     path: root.statePath
+    preload: false
+    blockAllReads: true
+    blockWrites: true
     watchChanges: true
-    atomicWrites: true
     printErrors: false
-    onLoaded: root.loadState(text())
-    // The text carried by the change signal is the stale one, so both paths go
-    // through reload() → onLoaded to parse what is actually on disk now.
-    onFileChanged: reload()
-    // First run: the file does not exist yet. Without this branch `stateLoaded`
-    // never flips and nothing is ever written.
-    onLoadFailed: root.loadState("")
+    onFileChanged: root.readState()
   }
+
+  Process {
+    id: stateReader
+    // `timeout` is only a backstop: readScript refuses anything that could
+    // block before it opens it.
+    command: ["timeout", "5", "sh", "-c", Model.readScript, "sh",
+      String(Model.stateMaxBytes), root.statePath]
+
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: root.applyStateRead(text)
+    }
+
+    onExited: Qt.callLater(root.startStateRead)
+  }
+
+  Process {
+    id: stateWriter
+
+    onExited: function(exitCode) {
+      if (exitCode !== 0) root.lastError = "Could not save the state file"
+      Qt.callLater(root.startStateWrite)
+    }
+  }
+
+  // A refused file can be a symlink, and the watcher follows links: it is then
+  // watching whatever the link points at, and replacing the link raises no
+  // change at all. So while a refusal stands, look again every few seconds —
+  // a local check and nothing more; no network — and once the path holds a
+  // file we accept, applyStateRead re-arms the watcher on it.
+  Timer {
+    id: stateRetryTimer
+    interval: 5000
+    repeat: true
+    running: root.stateError !== ""
+    onTriggered: root.readState()
+  }
+
+  Component.onCompleted: readState()
 
   Timer {
     id: saveTimer

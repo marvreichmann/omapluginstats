@@ -6,6 +6,19 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.1.2] - 2026-09-10
+
+### Security
+
+- The state file and the watched plugins' manifests are read only if they are
+  regular files you own, not symlinks or hard links, and within a size limit
+  (96 KB and 64 KB). Anything else is refused before it reaches the shell.
+- The state file is written by renaming a fresh file into place. A symlink
+  planted at its path is replaced instead of being followed, which previously
+  would have overwritten the file it pointed at.
+- A state file that fails those checks is left untouched, and the panel says
+  that changes are not being saved until it is fixed.
+
 ## [1.1.1] - 2026-09-10
 
 ### Security
@@ -68,7 +81,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Refresh on demand, and automatically when the panel is opened on numbers more
   than five minutes old.
 
-[Unreleased]: https://github.com/marvreichmann/omapluginstats/compare/v1.1.1...HEAD
+[Unreleased]: https://github.com/marvreichmann/omapluginstats/compare/v1.1.2...HEAD
+[1.1.2]: https://github.com/marvreichmann/omapluginstats/compare/v1.1.1...v1.1.2
 [1.1.1]: https://github.com/marvreichmann/omapluginstats/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/marvreichmann/omapluginstats/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/marvreichmann/omapluginstats/releases/tag/v1.0.0
