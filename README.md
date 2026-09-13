@@ -1,5 +1,7 @@
 # Omapluginstats
 
+[![Built for Omarchy: Plugin](https://raw.githubusercontent.com/tcballard/omarchy-badges/75975e5b5bf75e7ede3764bcd2950046f7abfe2c/badges/v1/omarchy-plugin.svg)](https://github.com/tcballard/omarchy-badges)
+
 Views, copies and hearts for a watchlist of plugins on the
 [Omarchy plugin marketplace](https://plugins.omarchy.org), in a bar panel — and,
 if you want one, on the bar itself as a split-flap departure board.
